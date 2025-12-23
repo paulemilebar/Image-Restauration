@@ -11,9 +11,6 @@ This repository contains an **image restoration** project built around the **Plu
 > Key point: the IRCNN here is a **sigma-map conditioned variant** (4th input channel), so a **single model** can handle multiple noise levels (instead of training one model per σ).  
 > DRUNet is used in the “paper-style” way: **input = noisy RGB + sigma map**.
 
----
-
-## ✨ What’s implemented
 
 ### 1) IRCNN (sigma-map conditioned)
 - IRCNN-like **7-layer dilated CNN** (dilations: 1–2–3–4–3–2–1).
@@ -32,10 +29,9 @@ Supported tasks:
 
 ---
 
-## 📂 Repository structure (typical)
-> Your exact filenames may differ; adjust the paths accordingly.
+## Repository structure
 
-- `datasets/` or `BSDS300/`  
+`BSDS300/`  
   Clean training/test images (e.g., BSDS300).
 - `models/`
   - `ircnn_sigmap.py` — IRCNN sigma-map network
@@ -53,7 +49,7 @@ Supported tasks:
 
 ---
 
-## 🧠 Sigma-map conditioning (how it works)
+## Sigma-map conditioning (how it works)
 Each training sample is built as:
 - `clean`: RGB patch in `[0, 1]` with shape `(3, H, W)`
 - `noisy = clean + n`, where `n ~ N(0, (σ/255)^2)`
@@ -62,9 +58,8 @@ Each training sample is built as:
 
 So the network input is **(noisy RGB + noise level map)**.
 
----
 
-## 🚀 Setup
+## Setup
 
 ### Requirements
 - Python 3.9+ (recommended)
