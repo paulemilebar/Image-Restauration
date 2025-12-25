@@ -49,7 +49,7 @@ def load_kernel12(kernels_mat_path: str, k_index: int) -> np.ndarray:
 
 
 # ============================================================
-# DPIR SISR closed-form (Eq. 14) helpers (same math as DPIR)
+# DPIR SISR closed-form (Eq. 14) helpers
 # ============================================================
 def splits(a: torch.Tensor, sf: int) -> torch.Tensor:
     # a: N x C x H x W -> N x C x (H/sf) x (W/sf) x (sf^2)
@@ -154,8 +154,8 @@ def run_one(
     out_dir: str,
     scale: int = 3,
     sigma_img: float = 7.65,     # LR noise in pixel space (0..255)
-    k_size: int = 7,            # unused (kept to match your signature)
-    k_sigma: float = 1.6,       # unused (kept to match your signature)
+    k_size: int = 7,
+    k_sigma: float = 1.6,
     iter_num: int = 24,
     kernels_mat_path: str = "kernels/kernels_12.mat",
     k_index: int = 2,           # choose 0..7
@@ -199,7 +199,7 @@ def run_one(
             torch.manual_seed(seed)
             y = y + torch.randn_like(y) * sigma_n
 
-    # ---- save only the 3 requested images ----
+    # ---- save only the 3 images
     save_img01(x, os.path.join(out_dir, "clean.png"))
     save_img01(y, os.path.join(out_dir, "lr.png"))
 
@@ -216,6 +216,11 @@ def run_one(
     # ---- init z0 = bicubic(y) + shift correction ----
     z = F.interpolate(y, scale_factor=scale, mode="bicubic", align_corners=False)
     z = shift_pixel_torch(z, sf=scale, upper_left=True).clamp(0, 1)
+    save_img01(z, os.path.join(out_dir, "bicubic.png"))
+
+    psnr_bic = psnr_torch(z.cpu(), x.cpu())
+    print(f"PSNR bicubic (z0): {psnr_bic:.2f} dB")
+
 
     # ---- iterations: x_k (closed-form) then z_k (DRUNet) ----
     psnr_x = []
@@ -254,10 +259,6 @@ def run_one(
     plt.legend()
     plt.show()
 
-
-# ============================================================
-# Your call (no argparse)
-# ============================================================
 run_one(
         clean_path="./BSDS300/images/test/101087.jpg",
         ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
