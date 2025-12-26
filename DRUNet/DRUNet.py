@@ -1,12 +1,10 @@
-import os, time, math, random
+import os, random
 from typing import Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.optim import Adam
-from torch.utils.data import Dataset, DataLoader
-from tqdm import tqdm
+from torch.utils.data import Dataset
 
 from PIL import Image
 import torchvision.transforms.functional as TF
@@ -146,7 +144,7 @@ class DRUNetSigmaMap(nn.Module):
     Input:  (B,4,H,W) noisy RGB + sigma_map
     Output: (B,3,H,W) denoised
     Conforme au papier: 4 scales, nc=[64,128,256,512], nb=4,
-    bias-free, SConv 2x2, TConv 2x2, pas d'activation après head/tail/SConv/TConv. :contentReference[oaicite:4]{index=4}
+    bias-free, SConv 2x2, TConv 2x2, pas d'activation après head/tail/SConv/TConv.
     """
     def __init__(self, in_nc=4, out_nc=3, nc=(64,128,256,512), nb=4):
         super().__init__()

@@ -53,6 +53,7 @@ def load_kernel12(kernels_mat_path: str, k_index: int) -> np.ndarray:
 # ============================================================
 def splits(a: torch.Tensor, sf: int) -> torch.Tensor:
     # a: N x C x H x W -> N x C x (H/sf) x (W/sf) x (sf^2)
+    # sf: scale factor
     b = torch.stack(torch.chunk(a, sf, dim=2), dim=4)
     b = torch.cat(torch.chunk(b, sf, dim=3), dim=4)
     return b
@@ -78,7 +79,7 @@ def downsample_decimate(x: torch.Tensor, sf: int) -> torch.Tensor:
 
 def pre_calculate(img_L: torch.Tensor, k: torch.Tensor, sf: int):
     h, w = img_L.shape[-2:]
-    FB  = p2o(k, (h*sf, w*sf))
+    FB  = p2o(k, (h*sf, w*sf)) # FB = FFT(k) : opérateur de floutage B dans Fourrier
     FBC = torch.conj(FB)
     F2B = torch.pow(torch.abs(FB), 2)
     STy = upsample_zeros(img_L, sf=sf)
@@ -154,8 +155,6 @@ def run_one(
     out_dir: str,
     scale: int = 3,
     sigma_img: float = 7.65,     # LR noise in pixel space (0..255)
-    k_size: int = 7,
-    k_sigma: float = 1.6,
     iter_num: int = 24,
     kernels_mat_path: str = "kernels/kernels_12.mat",
     k_index: int = 2,           # choose 0..7
@@ -260,12 +259,10 @@ def run_one(
     plt.show()
 
 run_one(
-        clean_path="./BSDS300/images/test/101087.jpg",
+        clean_path="./BSDS300/images/test/37073.jpg",
         ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
         out_dir="test_outputs_dpir_sisr",
         scale=2,
         sigma_img=0,
-        k_size=7,
-        k_sigma=1.6,
         iter_num=24,
     )

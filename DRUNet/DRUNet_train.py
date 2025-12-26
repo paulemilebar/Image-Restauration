@@ -1,14 +1,12 @@
-import os, time, math, random
-from typing import Tuple
+import os, time
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.optim import Adam
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from tqdm import tqdm
+from DRUNet import RandomPatchSigmaMapDataset, DRUNetSigmaMap
 
-from PIL import Image
 import torchvision.transforms.functional as TF
 
 

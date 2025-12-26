@@ -12,12 +12,6 @@ from PIL import Image
 import torchvision.transforms.functional as TF
 from DRUNet import DRUNetSigmaMap
 
-
-
-
-# -------------------------
-# Utils test (comme IRCNN)
-# -------------------------
 def psnr_torch(x, y, eps=1e-8):
     mse = torch.mean((x - y) ** 2).item()
     return 10.0 * math.log10(1.0 / (mse + eps))
