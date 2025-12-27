@@ -264,5 +264,5 @@ test_deblurring_dpir_with_levin09(
      sigma_img=2.55,
      n_iter=8,
      lam=0.23,
-     out_dir="test_outputs_dpir_deblur",
+     out_dir="results_DRUNET_deblur",
  )

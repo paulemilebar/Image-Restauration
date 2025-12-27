@@ -60,9 +60,9 @@ def test_mode_A_clean_to_noisy(clean_path, ckpt_path, out_dir="test_outputs_drun
     print(f"PSNR denoised: {psnr_den:.2f} dB")
 
 test_mode_A_clean_to_noisy(
-        clean_path=r"./BSDS300/images/test/24077.jpg",
+        clean_path=r"./BSDS300/images/test/102061.jpg",
         ckpt_path=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
-        out_dir="test_outputs_denoise_drunet",
-        sigma=70.0,
+        out_dir="results_DRUNET_denoise",
+        sigma=20,
         seed=0
     )

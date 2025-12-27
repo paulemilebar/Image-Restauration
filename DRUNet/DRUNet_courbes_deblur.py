@@ -4,18 +4,12 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.optim import Adam
-from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-
 from PIL import Image
 import torchvision.transforms.functional as TF
 from DRUNet import DRUNetSigmaMap
 from DRUNet_deblur import load_levin09_kernel, psf_to_otf, circ_conv_fft, psnr_torch
-
-
 import numpy as np
-
 import os, math
 import numpy as np
 import torch
@@ -221,7 +215,7 @@ logs = test_deblurring_dpir_with_levin09_convergence(
     sigma_img=2.55,
     n_iter=8,
     lam=0.23,
-    out_dir="test_outputs_dpir_deblur_conv",
+    out_dir="results_DRUNET_deblur_courbes",
     seed=0,
     save_iters=True
 )

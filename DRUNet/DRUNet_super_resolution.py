@@ -261,7 +261,7 @@ def run_one(
 run_one(
         clean_path="./BSDS300/images/test/37073.jpg",
         ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-        out_dir="test_outputs_dpir_sisr",
+        out_dir="results_DRUNET_superresolution",
         scale=2,
         sigma_img=0,
         iter_num=24,

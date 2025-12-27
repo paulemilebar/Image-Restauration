@@ -358,7 +358,7 @@ def run_compare(clean_path, out_dir, drunet_ckpt, ircnn_ckpt,
 if __name__ == "__main__":
     run_compare(
         clean_path=r"./BSDS300/images/test/102061.jpg",
-        out_dir="out_dpir_like_inpaint",
+        out_dir="results_IRCNN_DRUNET_SHEPARD_inpaint",
         drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
         ircnn_ckpt=r"./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
         missing_ratio=0.4,

@@ -100,6 +100,6 @@ def test_mode_B_real_noisy(
 test_mode_A_clean_to_noisy(
     clean_path=r"./BSDS300/images/test/102061.jpg",
     ckpt_path=r"./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
-    out_dir="test_outputs_denoise_IRCNN",
-    sigma=70
+    out_dir="results_IRCNN_denoise",
+    sigma=20
 )

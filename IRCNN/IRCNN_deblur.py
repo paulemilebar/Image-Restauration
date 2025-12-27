@@ -223,7 +223,7 @@ print("Image choisie:", clean_path)
 ckpt_path = r"weights_ircnn_sigmap/ircnn_sigmap_final.pth" 
 
 # 3) Paramètres de flou + bruit pour le test
-out_dir = "test_deblur_IRCNN"
+out_dir = "results_IRCNN_deblur"
 ksize = 19
 blur_sigma = 1.6       # flou gaussien 
 sigma_n_pixels = 2   # bruit rajouté
