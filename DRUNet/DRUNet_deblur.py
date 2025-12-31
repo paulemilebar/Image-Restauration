@@ -409,27 +409,27 @@ def benchmark_dpir_deblur_to_csv(
     return df, csv_path
 
 if __name__ == "__main__":
-    #test_deblurring_dpir_with_levin09(
-    #     clean_path="./BSDS300/images/test/102061.jpg",
-    #     ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-    #     levin09_path="kernels/Levin09.npy",
-    #     kernel_index=0,
-    #     sigma_img=2.55,
-    #     n_iter=8,
-    #     lam=0.23,
-    #     out_dir="results_DRUNET_deblur",
-    # )
+    test_deblurring_dpir_with_levin09(
+         clean_path="./BSDS300/images/test/37073.jpg",
+         ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
+         levin09_path="kernels/Levin09.npy",
+         kernel_index=0,
+         sigma_img=2.55,
+         n_iter=8,
+         lam=0.23,
+         out_dir="results_DRUNET_deblur",
+ )
 
-    benchmark_dpir_deblur_to_csv(
-        test_dir="./BSDS300/images/test",
-        ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-        levin09_path="kernels/Levin09.npy",
-        kernel_index=0,
-        sigma_img=2.55,
-        n_iter=8,
-        lam=0.23,
-        n_images=10,
-        seed=0,
-        out_dir="results_DRUNET_deblur_benchmark",
-        save_examples=False,
-    )
+ #   benchmark_dpir_deblur_to_csv(
+  #      test_dir="./BSDS300/images/test",
+  #      ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
+  #      levin09_path="kernels/Levin09.npy",
+  #      kernel_index=0,
+  #      sigma_img=2.55,
+  #      n_iter=8,
+  #      lam=0.23,
+  #      n_images=10,
+  #      seed=0,
+  #      out_dir="results_DRUNET_deblur_benchmark",
+  #      save_examples=False,
+  #  )

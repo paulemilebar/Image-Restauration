@@ -572,36 +572,36 @@ def run_pool_10_images(
 
 
 if __name__ == "__main__":
-#    run_compare(
-#        clean_path=r"./BSDS300/images/test/24077.jpg",
-#        out_dir="results_IRCNN_DRUNET_SHEPARD_inpaint",
-#        drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
-#        ircnn_ckpt=r"./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
-#        missing_ratio=0.42,
-#        seed=0,
-#        iter_num=20,
-#        sigma_obs_pix=5.0,
-#        modelSigma2_pix=2.55,   
-#        shepard_window=11,
-#        shepard_p=2.0,
-#    )
-    
-    
-    df = run_pool_10_images(
-        clean_dir=r"./BSDS300/images/test",
-        out_root="results_DRUNET_IRCNN_inpaint_benchmark",
+    run_compare(
+        clean_path=r"./BSDS300/images/test/37073.jpg",
+        out_dir="results_IRCNN_DRUNET_SHEPARD_inpaint",
         drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
         ircnn_ckpt=r"./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
-        n_images=10,
-        seed=0,
         missing_ratio=0.42,
+        seed=0,
         iter_num=20,
         sigma_obs_pix=5.0,
-        modelSigma2_pix=2.55,
-        shepard_window=21,
+        modelSigma2_pix=2.55,   
+        shepard_window=11,
         shepard_p=2.0,
-        save_outputs_per_image=False,  # mets True si tu veux un sous-dossier par image avec les PNG
-        save_convergence=False,        # mets True si tu veux les 3 plots convergence par image
-        csv_name="pool10_metrics.csv"
     )
-    print(df if isinstance(df, list) else df.tail(5))
+    
+    
+ #   df = run_pool_10_images(
+ #       clean_dir=r"./BSDS300/images/test",
+ #       out_root="results_DRUNET_IRCNN_inpaint_benchmark",
+ #       drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
+ #       ircnn_ckpt=r"./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
+ #       n_images=10,
+ #       seed=0,
+ #       missing_ratio=0.42,
+ #       iter_num=20,
+ #       sigma_obs_pix=5.0,
+ #       modelSigma2_pix=2.55,
+ #       shepard_window=21,
+ #       shepard_p=2.0,
+ #       save_outputs_per_image=False,  # mets True si tu veux un sous-dossier par image avec les PNG
+ #       save_convergence=False,        # mets True si tu veux les 3 plots convergence par image
+ #       csv_name="pool10_metrics.csv"
+ #   )
+ #   print(df if isinstance(df, list) else df.tail(5))
