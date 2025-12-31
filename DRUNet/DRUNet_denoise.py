@@ -6,8 +6,13 @@ import torch.nn.functional as F
 import pandas as pd
 from PIL import Image
 import torchvision.transforms.functional as TF
+try:
+    # Tentative pour quand on lance depuis le Benchmark
+    from DRUNet.DRUNet import DRUNetSigmaMap
+except ModuleNotFoundError:
+    # Repli pour quand on lance le fichier en direct
+    from DRUNet import DRUNetSigmaMap
 
-from DRUNet import DRUNetSigmaMap
 
 def psnr_torch(x01: torch.Tensor, y01: torch.Tensor, eps: float = 1e-8) -> float:
     """x01,y01: (1,3,H,W) in [0,1]"""
@@ -221,7 +226,7 @@ def benchmark_drunet_random(
 
     return df
 
-
+'''
 if __name__ == "__main__":
     # 1) Une image (qualitatif + PSNR + sauvegardes)
     run_single_image_demo(clean_path="./BSDS300/images/test/102061.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET_denoise_single", sigma=20.0, seed=0)
@@ -236,3 +241,38 @@ if __name__ == "__main__":
   #      seed=0,
   #      save_examples=False,
   #  )
+'''
+
+
+
+@torch.no_grad()
+def denoise_drunet(
+    clean_path,
+    ckpt_path=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
+    out_dir=r"./benchmark/denoise",
+    sigma= 20.0,
+    seed= 0,
+    modulo= 8,
+):
+    """
+    Load clean image, add AWGN, denoise, save clean/noisy/denoised, print PSNR.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    model, device = load_drunet(ckpt_path)
+
+    clean_pil = Image.open(clean_path).convert("RGB")
+    clean = TF.to_tensor(clean_pil).unsqueeze(0)  # (1,3,H,W)
+
+    noisy = add_awgn(clean, sigma=sigma, seed=seed, device=device)  # NO CLAMP
+    den = denoise_noisy_tensor(model, noisy, sigma=sigma, device=device, modulo=modulo).cpu()
+
+    noisy_clamped = noisy.cpu().clamp(0.0, 1.0)
+    psnr_noisy = psnr_torch(noisy_clamped, clean)
+    psnr_den = psnr_torch(den, clean)
+    
+    img_id = os.path.splitext(os.path.basename(clean_path))[0]
+    img_dir = os.path.join(out_dir, img_id)
+    os.makedirs(img_dir, exist_ok=True)
+    TF.to_pil_image(den.squeeze(0)).save(os.path.join(img_dir, f"denoised_drunet.png"))
+
+    return psnr_den
