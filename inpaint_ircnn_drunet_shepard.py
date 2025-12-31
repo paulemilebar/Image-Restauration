@@ -9,7 +9,9 @@ import torchvision.transforms.functional as TF
 from DRUNet.DRUNet import DRUNetSigmaMap
 from IRCNN.IRCNN import IRCNNSigmaMap
 import matplotlib.pyplot as plt
-
+import time
+from glob import glob
+import pandas as pd
 
 
 # =========================
@@ -354,18 +356,252 @@ def run_compare(clean_path, out_dir, drunet_ckpt, ircnn_ckpt,
     print(" ", os.path.join(out_dir, "drunet_psnr_xk.png"))
     print(" ", os.path.join(out_dir, "drunet_rel_step_log.png"))
     print(" ", os.path.join(out_dir, "drunet_cumsum_rel_step.png"))
+    
+############## CODE FOR BENCHMARK
+
+IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff")
+
+def list_images_in_dir(root: str):
+    paths = []
+    for ext in IMG_EXT:
+        paths += glob(os.path.join(root, f"**/*{ext}"), recursive=True)
+        paths += glob(os.path.join(root, f"**/*{ext.upper()}"), recursive=True)
+    return sorted(list(set(paths)))
+
+def pick_n_images(paths, n=10, seed=0):
+    rng = random.Random(seed)
+    if n >= len(paths):
+        return paths
+    return rng.sample(paths, n)
+
+def load_models_once(device, drunet_ckpt, ircnn_ckpt):
+    # DRUNet
+    drunet = DRUNetSigmaMap(in_nc=4, out_nc=3, nc=(64,128,256,512), nb=4).to(device).eval()
+    st = torch.load(drunet_ckpt, map_location=device)
+    sd = st["model"] if isinstance(st, dict) and "model" in st else st
+    drunet.load_state_dict(sd, strict=True)
+
+    # IRCNN
+    ircnn = IRCNNSigmaMap(features=64).to(device).eval()
+    st = torch.load(ircnn_ckpt, map_location=device)
+    sd = st["model"] if isinstance(st, dict) and "model" in st else st
+    ircnn.load_state_dict(sd, strict=True)
+
+    return drunet, ircnn
+
+@torch.no_grad()
+def run_compare_return_metrics(
+    clean_path,
+    out_dir,
+    drunet,
+    ircnn,
+    missing_ratio=0.15,
+    seed=0,
+    iter_num=15,
+    sigma_obs_pix=5.0,
+    modelSigma2_pix=2.55,
+    shepard_window=21,
+    shepard_p=2.0,
+    save_outputs=True,          # <-- NEW
+    save_convergence=True       # <-- NEW (uniquement DRUNet pour l’instant)
+):
+    os.makedirs(out_dir, exist_ok=True)
+    device = next(drunet.parameters()).device
+
+    gt = TF.to_tensor(Image.open(clean_path).convert("RGB")).unsqueeze(0).to(device).clamp(0, 1)
+    _, _, H, W = gt.shape
+
+    M = make_random_rect_mask(H, W, missing_ratio=missing_ratio, seed=seed).to(device=device, dtype=gt.dtype)
+    M3 = M.repeat(1, 3, 1, 1)
+    y = (gt * M3).clamp(0, 1)
+
+    # bruit observation (sur pixels connus)
+    sigma_obs = float(sigma_obs_pix) / 255.0
+    if sigma_obs > 0:
+        y = (M3 * (y + randn_like_compat(y, seed=seed+123) * sigma_obs)).clamp(0, 1)
+
+    # Shepard init
+    rec_sh = shepard_initialize_rgb(y, M, window=int(shepard_window), p=shepard_p).to(device=device, dtype=gt.dtype)
+    rec_sh = (M3 * y + (1.0 - M3) * rec_sh).clamp(0, 1)
+
+    # DPIR-HQS
+    t0 = time.perf_counter()
+    out = dpir_hqs_inpaint(
+    y=y, M=M, model_name="drunet", model=drunet,
+    iter_num=iter_num, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
+    shepard_window=int(shepard_window), shepard_p=shepard_p, seed=seed,
+    track_convergence=save_convergence, gt=gt
+    )
+
+    if save_convergence:
+        rec_d, metrics_d = out
+    else:
+        rec_d = out
+        metrics_d = None
+
+    t_d = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    rec_i = dpir_hqs_inpaint(
+        y=y, M=M, model_name="ircnn", model=ircnn,
+        iter_num=iter_num, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
+        shepard_window=int(shepard_window), shepard_p=shepard_p, seed=seed
+    )
+    t_i = time.perf_counter() - t0
+
+    # métriques globales + sur trous
+    miss = (1.0 - M3)
+
+    def psnr_on_missing(a, b, missmask, eps=1e-12):
+        num = missmask.sum().item()
+        mse = (((a - b) * missmask) ** 2).sum().item() / (num + eps)
+        return 10.0 * math.log10(1.0 / (mse + eps))
+
+    res = {
+        "image": os.path.basename(clean_path),
+        "H": H, "W": W,
+        "missing_ratio": float(missing_ratio),
+        "iter_num": int(iter_num),
+        "sigma_obs_pix": float(sigma_obs_pix),
+        "shepard_window": int(shepard_window),
+        "psnr_input": psnr_torch(y, gt),
+        "psnr_shepard": psnr_torch(rec_sh, gt),
+        "psnr_dpir_drunet": psnr_torch(rec_d, gt),
+        "psnr_dpir_ircnn": psnr_torch(rec_i, gt),
+        "psnr_miss_input": psnr_on_missing(y, gt, miss),
+        "psnr_miss_shepard": psnr_on_missing(rec_sh, gt, miss),
+        "psnr_miss_dpir_drunet": psnr_on_missing(rec_d, gt, miss),
+        "psnr_miss_dpir_ircnn": psnr_on_missing(rec_i, gt, miss),
+        "time_drunet_s": t_d,
+        "time_ircnn_s": t_i,
+    }
+
+    # Sauvegardes (optionnelles)
+    if save_outputs:
+        save_img01(gt,  os.path.join(out_dir, "clean.png"))
+        save_img01(M3, os.path.join(out_dir, "mask.png"))
+        save_img01(y,  os.path.join(out_dir, "masked_noisy.png"))
+        save_img01(rec_sh, os.path.join(out_dir, "restored_shepard_only.png"))
+        save_img01(rec_d,  os.path.join(out_dir, "restored_dpir_hqs_drunet.png"))
+        save_img01(rec_i,  os.path.join(out_dir, "restored_dpir_hqs_ircnn.png"))
+
+        if save_convergence and (metrics_d is not None):
+            save_convergence_plots(metrics_d, out_dir=out_dir, prefix="drunet")
+
+    return res
+
+
+def run_pool_10_images(
+    clean_dir,
+    out_root,
+    drunet_ckpt,
+    ircnn_ckpt,
+    n_images=10,
+    seed=0,
+    missing_ratio=0.42,
+    iter_num=20,
+    sigma_obs_pix=5.0,
+    modelSigma2_pix=2.55,
+    shepard_window=21,
+    shepard_p=2.0,
+    save_outputs_per_image=False,     # si False -> pas d’images, juste le tableau
+    save_convergence=False,           # convergence plots par image (DRUNet)
+    csv_name="results_pool.csv"
+):
+    os.makedirs(out_root, exist_ok=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Device:", device)
+
+    # sélection images
+    paths = list_images_in_dir(clean_dir)
+    if not paths:
+        raise ValueError(f"Aucune image trouvée dans {clean_dir}")
+    chosen = pick_n_images(paths, n=n_images, seed=seed)
+
+    # charge modèles une fois
+    drunet, ircnn = load_models_once(device, drunet_ckpt, ircnn_ckpt)
+
+    rows = []
+    for p in chosen:
+        name = os.path.splitext(os.path.basename(p))[0]
+        out_dir = os.path.join(out_root, name) if save_outputs_per_image else out_root
+
+        r = run_compare_return_metrics(
+            clean_path=p,
+            out_dir=out_dir,
+            drunet=drunet,
+            ircnn=ircnn,
+            missing_ratio=missing_ratio,
+            seed=seed,
+            iter_num=iter_num,
+            sigma_obs_pix=sigma_obs_pix,
+            modelSigma2_pix=modelSigma2_pix,
+            shepard_window=shepard_window,
+            shepard_p=shepard_p,
+            save_outputs=save_outputs_per_image,
+            save_convergence=save_convergence
+        )
+        rows.append(r)
+        print(f"[OK] {r['image']} | PSNR DRUNet={r['psnr_dpir_drunet']:.2f}  IRCNN={r['psnr_dpir_ircnn']:.2f}")
+
+        df = pd.DataFrame(rows)
+
+        # stats globales
+        metric_cols = [c for c in df.columns if c.startswith("psnr") or c.startswith("time_")]
+        mean_row = {"image": "MEAN"}
+        std_row  = {"image": "STD"}
+        for c in metric_cols:
+            mean_row[c] = float(df[c].mean())
+            std_row[c]  = float(df[c].std())
+        df2 = pd.concat([df, pd.DataFrame([mean_row, std_row])], ignore_index=True)
+
+        csv_path = os.path.join(out_root, csv_name)
+        df2.to_csv(csv_path, index=False)
+        print("[DONE] CSV saved:", csv_path)
+        return df2
+    else:
+        # fallback sans pandas
+        csv_path = os.path.join(out_root, csv_name)
+        keys = list(rows[0].keys())
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write(",".join(keys) + "\n")
+            for r in rows:
+                f.write(",".join(str(r[k]) for k in keys) + "\n")
+        print("[DONE] CSV saved:", csv_path, "(pandas non dispo)")
+        return rows
+
 
 if __name__ == "__main__":
-    run_compare(
-        clean_path=r"./BSDS300/images/test/102061.jpg",
-        out_dir="results_IRCNN_DRUNET_SHEPARD_inpaint",
+#    run_compare(
+#        clean_path=r"./BSDS300/images/test/24077.jpg",
+#        out_dir="results_IRCNN_DRUNET_SHEPARD_inpaint",
+#        drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
+#        ircnn_ckpt=r"./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
+#        missing_ratio=0.42,
+#        seed=0,
+#        iter_num=20,
+#        sigma_obs_pix=5.0,
+#        modelSigma2_pix=2.55,   
+#        shepard_window=11,
+#        shepard_p=2.0,
+#    )
+    
+    
+    df = run_pool_10_images(
+        clean_dir=r"./BSDS300/images/test",
+        out_root="results_DRUNET_IRCNN_inpaint_benchmark",
         drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
         ircnn_ckpt=r"./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
-        missing_ratio=0.4,
+        n_images=10,
         seed=0,
+        missing_ratio=0.42,
         iter_num=20,
         sigma_obs_pix=5.0,
-        modelSigma2_pix=2.55,   
-        shepard_window=9,
+        modelSigma2_pix=2.55,
+        shepard_window=21,
         shepard_p=2.0,
+        save_outputs_per_image=False,  # mets True si tu veux un sous-dossier par image avec les PNG
+        save_convergence=False,        # mets True si tu veux les 3 plots convergence par image
+        csv_name="pool10_metrics.csv"
     )
+    print(df if isinstance(df, list) else df.tail(5))

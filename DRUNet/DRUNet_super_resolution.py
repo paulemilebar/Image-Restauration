@@ -1,6 +1,7 @@
 import os, math
 import numpy as np
 from PIL import Image
+import random
 
 import torch
 import torch.nn.functional as F
@@ -10,10 +11,6 @@ import matplotlib.pyplot as plt
 
 from DRUNet import DRUNetSigmaMap
 
-
-# ============================================================
-# Utils
-# ============================================================
 def psnr_torch(x, y, eps=1e-12):
     mse = torch.mean((x - y) ** 2).item()
     return 10.0 * math.log10(1.0 / (mse + eps))
@@ -28,9 +25,7 @@ def save_img01(t: torch.Tensor, path: str):
     TF.to_pil_image(t.squeeze(0).clamp(0, 1).cpu()).save(path)
 
 
-# ============================================================
 # Load kernels_12.mat (paper kernels)
-# ============================================================
 def loadmat_any(path: str):
     try:
         import hdf5storage
@@ -48,9 +43,7 @@ def load_kernel12(kernels_mat_path: str, k_index: int) -> np.ndarray:
     return k
 
 
-# ============================================================
 # DPIR SISR closed-form (Eq. 14) helpers
-# ============================================================
 def splits(a: torch.Tensor, sf: int) -> torch.Tensor:
     # a: N x C x H x W -> N x C x (H/sf) x (W/sf) x (sf^2)
     # sf: scale factor
@@ -145,9 +138,7 @@ def drunet_infer(model, inp, modulo: int = 8):
     return model(inp)
 
 
-# ============================================================
 # Main DPIR SISR (minimal outputs + PSNR plot)
-# ============================================================
 @torch.no_grad()
 def run_one(
     clean_path: str,
@@ -258,11 +249,206 @@ def run_one(
     plt.legend()
     plt.show()
 
-run_one(
-        clean_path="./BSDS300/images/test/37073.jpg",
+import pandas as pd
+
+
+def list_images(folder, exts=(".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")):
+    paths = []
+    for root, _, files in os.walk(folder):
+        for fn in files:
+            if fn.lower().endswith(exts):
+                paths.append(os.path.join(root, fn))
+    return sorted(paths)
+
+
+@torch.no_grad()
+def run_one_metrics_sisr(
+    clean_path: str,
+    model: torch.nn.Module,
+    device: torch.device,
+    out_dir: str | None,
+    scale: int = 2,
+    sigma_img: float = 0.0,
+    iter_num: int = 24,
+    kernels_mat_path: str = "kernels/kernels_12.mat",
+    k_index: int = 2,
+    modelSigma1: float = 49.0,
+    seed: int = 0,
+    save_images: bool = False,
+):
+    """
+    Même pipeline que run_one, mais:
+      - ne charge pas le modèle (on le réutilise)
+      - retourne PSNR bicubic et PSNR final (z_K)
+      - sauvegarde optionnellement clean/lr/bicubic/restored
+    """
+    if out_dir is not None:
+        os.makedirs(out_dir, exist_ok=True)
+
+    # ---- load HR ----
+    x = TF.to_tensor(Image.open(clean_path).convert("RGB")).unsqueeze(0).to(device)
+    x = modcrop_tensor(x, scale)
+    B, C, H, W = x.shape
+
+    # ---- load kernel ----
+    if not os.path.isfile(kernels_mat_path):
+        raise FileNotFoundError(f"Missing {kernels_mat_path}. Put kernels_12.mat in ./kernels/.")
+    k_np = load_kernel12(kernels_mat_path, k_index=k_index)
+    k = torch.from_numpy(k_np.astype(np.float32)).to(device=device, dtype=x.dtype)
+    k = k.unsqueeze(0).unsqueeze(0).repeat(1, C, 1, 1)  # (1,3,kh,kw)
+
+    # ---- degradation: y = (x ⊗ k)↓s + n ----
+    FB = p2o(k, (H, W))
+    xb = torch.real(torch.fft.ifftn(torch.fft.fftn(x, dim=(-2, -1)) * FB, dim=(-2, -1)))
+    y = downsample_decimate(xb, scale)
+
+    sigma_n = float(sigma_img) / 255.0
+    if sigma_n > 0:
+        try:
+            g = torch.Generator(device=device).manual_seed(seed)
+            y = y + torch.randn_like(y, generator=g) * sigma_n
+        except TypeError:
+            torch.manual_seed(seed)
+            y = y + torch.randn_like(y) * sigma_n
+
+    # ---- init z0 = bicubic + shift ----
+    z = F.interpolate(y, scale_factor=scale, mode="bicubic", align_corners=False)
+    z = shift_pixel_torch(z, sf=scale, upper_left=True).clamp(0, 1)
+
+    psnr_bic = psnr_torch(z.detach().cpu(), x.detach().cpu())
+
+    # ---- DPIR params ----
+    noise_level_model = sigma_n
+    modelSigma2 = max(float(scale), float(noise_level_model * 255.0))
+    rhos, sigmas = get_rho_sigma(noise_level_model, iter_num, modelSigma1, modelSigma2, w=1.0)
+    rhos_t = torch.tensor(rhos, device=device, dtype=x.dtype)
+    sigmas_t = torch.tensor(sigmas, device=device, dtype=x.dtype)
+
+    # ---- pre-calc ----
+    FB2, FBC, F2B, FBFy = pre_calculate(y, k, scale)
+
+    # ---- iterations ----
+    for i in range(iter_num):
+        alpha = rhos_t[i].view(1, 1, 1, 1)
+        xk = data_solution_closed_form(z, FB2, FBC, F2B, FBFy, alpha, scale).clamp(0, 1)
+
+        sigma_i = float(sigmas_t[i].item())
+        sigma_map = torch.full((B, 1, H, W), sigma_i, device=device, dtype=xk.dtype)
+        inp = torch.cat([xk, sigma_map], dim=1)
+
+        z = drunet_infer(model, inp, modulo=8).clamp(0, 1)
+
+    psnr_final = psnr_torch(z.detach().cpu(), x.detach().cpu())
+
+    # ---- optional save ----
+    if save_images and out_dir is not None:
+        base = os.path.splitext(os.path.basename(clean_path))[0]
+        save_img01(x, os.path.join(out_dir, f"{base}_clean.png"))
+        save_img01(y, os.path.join(out_dir, f"{base}_lr.png"))
+        save_img01(F.interpolate(y, scale_factor=scale, mode="bicubic", align_corners=False).clamp(0,1),
+                   os.path.join(out_dir, f"{base}_lr_bicubic_upsampled.png"))
+        save_img01(z, os.path.join(out_dir, f"{base}_restored.png"))
+
+    return {
+        "filename": os.path.basename(clean_path),
+        "path": clean_path,
+        "scale": int(scale),
+        "sigma_img": float(sigma_img),
+        "k_index": int(k_index),
+        "iter_num": int(iter_num),
+        "psnr_bicubic_db": float(psnr_bic),
+        "psnr_restored_db": float(psnr_final),
+        "gain_db": float(psnr_final - psnr_bic),
+    }
+
+
+@torch.no_grad()
+def benchmark_sisr_10_random_to_csv(
+    test_dir: str,
+    ckpt_path: str,
+    out_dir: str = "results_DRUNET_superresolution_benchmark",
+    n_images: int = 10,
+    seed: int = 0,
+    scale: int = 2,
+    sigma_img: float = 0.0,
+    iter_num: int = 24,
+    kernels_mat_path: str = "kernels/kernels_12.mat",
+    k_index: int = 2,
+    modelSigma1: float = 49.0,
+    save_examples: bool = False,
+):
+    """
+    Pick 10 random test images, run DPIR-SISR, write CSV and print means.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # load model once
+    model = DRUNetSigmaMap(in_nc=4, out_nc=3, nc=(64,128,256,512), nb=4).to(device).eval()
+    state = torch.load(ckpt_path, map_location=device)
+    sd = state["model"] if isinstance(state, dict) and "model" in state else state
+    model.load_state_dict(sd, strict=True)
+
+    all_paths = list_images(test_dir)
+    if len(all_paths) < n_images:
+        raise RuntimeError(f"Pas assez d'images dans {test_dir}: {len(all_paths)} < {n_images}")
+
+    rng = random.Random(seed)
+    chosen = rng.sample(all_paths, n_images)
+
+    rows = []
+    for i, p in enumerate(chosen):
+        row = run_one_metrics_sisr(
+            clean_path=p,
+            model=model,
+            device=device,
+            out_dir=out_dir,
+            scale=scale,
+            sigma_img=sigma_img,
+            iter_num=iter_num,
+            kernels_mat_path=kernels_mat_path,
+            k_index=k_index,
+            modelSigma1=modelSigma1,
+            seed=seed + i,
+            save_images=save_examples,
+        )
+        rows.append(row)
+        print(f"[{i+1}/{n_images}] {row['filename']} | bic {row['psnr_bicubic_db']:.2f} -> restored {row['psnr_restored_db']:.2f} dB")
+
+    df = pd.DataFrame(rows)
+    csv_path = os.path.join(out_dir, f"sisr_benchmark_{n_images}imgs_sf{scale}_sig{sigma_img}_k{k_index}_K{iter_num}_seed{seed}.csv")
+    df.to_csv(csv_path, index=False)
+
+    print("\n=== Moyennes (DPIR SISR) ===")
+    print(f"PSNR bicubic  : {df['psnr_bicubic_db'].mean():.2f} dB")
+    print(f"PSNR restored : {df['psnr_restored_db'].mean():.2f} dB")
+    print(f"Gain          : {df['gain_db'].mean():.2f} dB")
+    print("CSV saved:", csv_path)
+
+    return df, csv_path
+
+if __name__ == "__main__":
+    # ton test 1 image
+#    run_one(
+#        clean_path="./BSDS300/images/test/37073.jpg",
+#        ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
+#        out_dir="results_DRUNET_superresolution",
+#        scale=2,
+#        sigma_img=0,
+#        iter_num=24,
+#    )
+
+    # benchmark 10 images
+    benchmark_sisr_10_random_to_csv(
+        test_dir="./BSDS300/images/test",
         ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-        out_dir="results_DRUNET_superresolution",
+        out_dir="results_DRUNET_superresolution_benchmark",
+        n_images=10,
+        seed=0,
         scale=2,
         sigma_img=0,
         iter_num=24,
+        kernels_mat_path="kernels/kernels_12.mat",
+        k_index=2,
+        save_examples=False,
     )

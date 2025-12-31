@@ -1,20 +1,18 @@
-import os, time, math, random
-from typing import Tuple
+import os
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from tqdm import tqdm
 from PIL import Image
 import torchvision.transforms.functional as TF
 from DRUNet import DRUNetSigmaMap
 from DRUNet_deblur import load_levin09_kernel, psf_to_otf, circ_conv_fft, psnr_torch
 import numpy as np
-import os, math
+import os
 import numpy as np
 import torch
 from PIL import Image
 import torchvision.transforms.functional as TF
+import matplotlib.pyplot as plt
+
 
 def _rmse(a: torch.Tensor) -> float:
     return float(torch.sqrt(torch.mean(a**2)).item())
@@ -59,7 +57,8 @@ def dpir_hqs_deblur_with_trace(
         "xz_rmse": [],     # rmse(x - z)
         "dx_rel": [],      # rmse(x-x_prev)/rmse(x_prev)
         "dz_rel": [],      # rmse(z-z_prev)/rmse(z_prev)
-        "psnr_z": [],      # optional
+        "psnr_z": [], 
+        "psnr_x": [], 
     }
 
     for k in range(n_iter):
@@ -93,7 +92,9 @@ def dpir_hqs_deblur_with_trace(
             dx_rel = _rmse(x - x_prev) / (_rmse(x_prev) + 1e-12)
             dz_rel = _rmse(z - z_prev) / (_rmse(z_prev) + 1e-12)
 
-        psnr = psnr_torch(z.detach().cpu(), x_gt.detach().cpu()) if x_gt is not None else float("nan")
+        psnr_z = psnr_torch(z.detach().cpu(), x_gt.detach().cpu()) if x_gt is not None else float("nan")
+        psnr_x = psnr_torch(x.detach().cpu(), x_gt.detach().cpu()) if x_gt is not None else float("nan")
+
 
         logs["k"].append(k)
         logs["sigma_d"].append(sigma_d)
@@ -102,7 +103,8 @@ def dpir_hqs_deblur_with_trace(
         logs["xz_rmse"].append(xz_rmse)
         logs["dx_rel"].append(dx_rel)
         logs["dz_rel"].append(dz_rel)
-        logs["psnr_z"].append(psnr)
+        logs["psnr_z"].append(psnr_z)
+        logs["psnr_x"].append(psnr_x)
 
         if save_dir is not None and (k % save_every == 0 or k == n_iter - 1):
             TF.to_pil_image(z.squeeze(0).detach().cpu()).save(os.path.join(save_dir, f"z_iter{k:02d}.png"))
@@ -119,12 +121,9 @@ def print_logs_table(logs):
     for i in range(len(logs["k"])):
         k = logs["k"][i]
         print(f"{k:2d} | {logs['sigma_d'][i]:7.2f} | {logs['data_rmse'][i]:10.3e} | {logs['xz_rmse'][i]:10.3e} | "
-              f"{logs['dx_rel'][i]:9.3e} | {logs['dz_rel'][i]:9.3e} | {logs['psnr_z'][i]:7.2f}")
+              f"{logs['dx_rel'][i]:9.3e} | {logs['dz_rel'][i]:9.3e} | {logs['psnr_z'][i]:7.2f} {logs['psnr_x'][i]:7.2f}")
 
 
-# -------------------------
-# TEST: same as your test_deblurring_dpir_with_levin09 but with convergence trace
-# -------------------------
 @torch.no_grad()
 def test_deblurring_dpir_with_levin09_convergence(
     clean_path: str,
@@ -220,9 +219,6 @@ logs = test_deblurring_dpir_with_levin09_convergence(
     save_iters=True
 )
 
-
-import matplotlib.pyplot as plt
-
 def plot_convergence_curves(logs, title="DPIR/HQS convergence"):
     ks = np.array(logs["k"])
     sigma_d = np.array(logs["sigma_d"])
@@ -231,6 +227,7 @@ def plot_convergence_curves(logs, title="DPIR/HQS convergence"):
     dx_rel = np.array(logs["dx_rel"])
     dz_rel = np.array(logs["dz_rel"])
     psnr_z = np.array(logs["psnr_z"])
+    psnr_x = np.array(logs["psnr_x"])
 
     # 1) data fidelity + x-z consistency
     plt.figure()
@@ -255,6 +252,7 @@ def plot_convergence_curves(logs, title="DPIR/HQS convergence"):
     # 3) PSNR(z_k) (if available)
     if np.isfinite(psnr_z).any():
         plt.figure()
+        plt.plot(ks, psnr_z, marker="o")
         plt.plot(ks, psnr_z, marker="o")
         plt.xlabel("iteration k")
         plt.ylabel("PSNR(z_k) [dB]")

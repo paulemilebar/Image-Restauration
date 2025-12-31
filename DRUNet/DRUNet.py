@@ -9,9 +9,8 @@ from torch.utils.data import Dataset
 from PIL import Image
 import torchvision.transforms.functional as TF
 
-# -------------------------
 # Dataset 
-# -------------------------
+
 IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff")
 
 class RandomPatchSigmaMapDataset(Dataset):
@@ -80,9 +79,7 @@ class RandomPatchSigmaMapDataset(Dataset):
         inp = torch.cat([noisy, sigma_map], dim=0)  # (4,H,W)
         return inp, clean
 
-# -------------------------
 # DRUNet (papier): bias-free, 4 scales, SConv 2x2, TConv 2x2, nb=4
-# -------------------------
 class ResBlockOneReLU(nn.Module):
     """
     Residual block: Conv -> ReLU -> Conv, bias-free, un seul ReLU.

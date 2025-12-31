@@ -9,18 +9,14 @@ from DRUNet import RandomPatchSigmaMapDataset, DRUNetSigmaMap
 
 import torchvision.transforms.functional as TF
 
-
-# -------------------------
-# Train (même style que IRCNN)
-# -------------------------
 def train_drunet(
     clean_dir=r"./BSDS300/images/train",
     out_dir="weights_drunet_sigmap",
     patch=128,
     sigma_min=0.0,
     sigma_max=50.0,
-    batch_size=4,
-    steps_per_epoch=1000,
+    batch_size=16,
+    steps_per_epoch=5000,
     max_epochs=10,
     lr0=1e-4,
     lr1=5e-5,
