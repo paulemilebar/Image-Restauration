@@ -214,7 +214,7 @@ logs = test_deblurring_dpir_with_levin09_convergence(
     sigma_img=2.55,
     n_iter=15,
     lam=0.23,
-    out_dir="results_DRUNET_deblur_courbes",
+    out_dir="results_DRUNET/results_DRUNET_deblur_courbes",
     seed=0,
     save_iters=True
 )

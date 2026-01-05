@@ -409,7 +409,7 @@ if __name__ == "__main__":
          sigma_img=2.55,
          n_iter=8,
          lam=0.23,
-         out_dir="results_DRUNET_deblur",
+         out_dir="results_DRUNET/results_DRUNET_deblur",
  )
 
  #   benchmark_dpir_deblur_to_csv(
@@ -422,6 +422,6 @@ if __name__ == "__main__":
   #      lam=0.23,
   #      n_images=10,
   #      seed=0,
-  #      out_dir="results_DRUNET_deblur_benchmark",
+  #      out_dir="results_DRUNET/results_DRUNET_deblur_benchmark",
   #      save_examples=False,
   #  )

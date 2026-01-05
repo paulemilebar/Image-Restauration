@@ -504,7 +504,7 @@ if __name__ == "__main__":
         clean_dir=r"./BSDS300/images/test",
         exemplar_name="37073.jpg",
         ckpt_path=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
-        out_dir=r"./results_DRUNET_latent_analysis_37073",
+        out_dir=r"results_DRUNET/results_DRUNET_latent_analysis_37073",
         sigmas=(0.0, 5.0, 15.0, 25.0, 50.0, 70.0),
         corr_thr=0.90,
         also_run_pca=False,  # mets True si tu veux aussi le PCA multi-images

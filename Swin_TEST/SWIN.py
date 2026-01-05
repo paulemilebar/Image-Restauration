@@ -1,7 +1,3 @@
-# swinir_model.py
-# SwinIR (denoising, scale=1) + sigma-map conditioning (4ch input like DRUNet)
-# Minimal but solid implementation: window attention + shifted windows + residual groups.
-
 import math
 from typing import Tuple, Optional
 
@@ -29,9 +25,7 @@ def _unpad(x: torch.Tensor, pads: Tuple[int,int,int,int]) -> torch.Tensor:
     return x[:, :, pt:x.shape[2]-pb, pl:x.shape[3]-pr]
 
 
-# ----------------------------
 # MLP
-# ----------------------------
 class Mlp(nn.Module):
     def __init__(self, dim, hidden_dim, dropout=0.0):
         super().__init__()
@@ -49,9 +43,7 @@ class Mlp(nn.Module):
         return x
 
 
-# ----------------------------
 # Window helpers
-# ----------------------------
 def window_partition(x, window_size: int):
     """
     x: (B, H, W, C)
@@ -73,9 +65,7 @@ def window_reverse(windows, window_size: int, H: int, W: int):
     return x
 
 
-# ----------------------------
 # Window Attention (with relative position bias)
-# ----------------------------
 class WindowAttention(nn.Module):
     def __init__(self, dim, window_size: int, num_heads: int, qkv_bias=True, attn_drop=0.0, proj_drop=0.0):
         super().__init__()
@@ -148,9 +138,7 @@ class WindowAttention(nn.Module):
         return out
 
 
-# ----------------------------
 # Swin Transformer Block
-# ----------------------------
 class SwinTransformerBlock(nn.Module):
     def __init__(
         self,
@@ -250,9 +238,7 @@ class SwinTransformerBlock(nn.Module):
         return x
 
 
-# ----------------------------
 # Basic Layer (sequence of Swin blocks)
-# ----------------------------
 class BasicLayer(nn.Module):
     def __init__(self, dim, depth, num_heads, window_size=8, mlp_ratio=2.0, qkv_bias=True, drop=0.0, attn_drop=0.0):
         super().__init__()
@@ -279,9 +265,7 @@ class BasicLayer(nn.Module):
         return x
 
 
-# ----------------------------
 # Residual Swin Transformer Group (RSTB-like)
-# ----------------------------
 class ResidualSwinBlock(nn.Module):
     def __init__(self, dim, depth, num_heads, window_size=8, mlp_ratio=2.0):
         super().__init__()
@@ -302,9 +286,7 @@ class ResidualSwinBlock(nn.Module):
         return x + shortcut
 
 
-# ----------------------------
 # SwinIR for denoising (scale=1) with sigma-map conditioning
-# ----------------------------
 class SwinIRSigmaMap(nn.Module):
     """
     Input : (B,4,H,W) = noisy RGB + sigma_map

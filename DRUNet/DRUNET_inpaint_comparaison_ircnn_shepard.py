@@ -558,7 +558,7 @@ def run_pool_10_images(
 if __name__ == "__main__":
     run_compare(
         clean_path=r"./BSDS300/images/test/37073.jpg",
-        out_dir="results_IRCNN_DRUNET_SHEPARD_inpaint",
+        out_dir="results_DRUNET/results_IRCNN_DRUNET_SHEPARD_inpaint",
         drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
         ircnn_ckpt=r"./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
         missing_ratio=0.42,
@@ -573,7 +573,7 @@ if __name__ == "__main__":
     
  #   df = run_pool_10_images(
  #       clean_dir=r"./BSDS300/images/test",
- #       out_root="results_DRUNET_IRCNN_inpaint_benchmark",
+ #       out_root="results_DRUNET/results_DRUNET_IRCNN_inpaint_benchmark",
  #       drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
  #       ircnn_ckpt=r"./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
  #       n_images=10,

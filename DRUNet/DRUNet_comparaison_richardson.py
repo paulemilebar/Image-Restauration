@@ -174,6 +174,6 @@ test_deblur_compare_baselines_vs_dpir(
     seed=0,
     beta_l2=2e-3,
     rl_iters=30,
-    out_dir="results_DRUNET_comparaison_deblur",
+    out_dir="results_DRUNET/results_DRUNET_comparaison_deblur",
     dpir_fn=dpir_fn
 )

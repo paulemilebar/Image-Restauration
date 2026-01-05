@@ -428,7 +428,7 @@ if __name__ == "__main__":
 #    run_one(
 #        clean_path="./BSDS300/images/test/37073.jpg",
 #        ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-#        out_dir="results_DRUNET_superresolution",
+#        out_dir="results_DRUNET/results_DRUNET_superresolution",
 #        scale=2,
 #        sigma_img=0,
 #        iter_num=24,
@@ -438,7 +438,7 @@ if __name__ == "__main__":
     benchmark_sisr_10_random_to_csv(
         test_dir="./BSDS300/images/test",
         ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-        out_dir="results_DRUNET_superresolution_benchmark",
+        out_dir="results_DRUNET/results_DRUNET_superresolution_benchmark",
         n_images=10,
         seed=0,
         scale=2,

@@ -224,8 +224,8 @@ def benchmark_drunet_random(
 
 if __name__ == "__main__":
     # 1) Une image (qualitatif + PSNR + sauvegardes)
-    run_single_image_demo(clean_path="./BSDS300/images/test/37073.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET_denoise_single", sigma=50.0, seed=0)
+    run_single_image_demo(clean_path="./BSDS300/images/test/37073.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_single", sigma=50.0, seed=0)
 
     # 2) Benchmark N images (tableau + CSV)
-  #  benchmark_drunet_random(test_dir="./BSDS300/images/test", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET_denoise_benchmark", sigma=20.0, n_images=20, seed=0, save_examples=False)
+  #  benchmark_drunet_random(test_dir="./BSDS300/images/test", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_benchmark", sigma=20.0, n_images=20, seed=0, save_examples=False)
 
