@@ -1,18 +1,11 @@
-import os, time, math, random
-from typing import Tuple
+import os, random
 from DRUNet_denoise import psnr_torch
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.optim import Adam
-from torch.utils.data import Dataset, DataLoader
-from tqdm import tqdm
 import pandas as pd
 from PIL import Image
 import torchvision.transforms.functional as TF
 from DRUNet import DRUNetSigmaMap
-
 
 import numpy as np
 
@@ -144,7 +137,7 @@ def dpir_hqs_deblur(
 
     Y = torch.fft.fft2(y, dim=(-2, -1))
     Hc = torch.conj(otf)
-    H2 = (otf.real ** 2 + otf.imag ** 2)  # |H|^2 real
+    H2 = (otf.real ** 2 + otf.imag ** 2)  # |H|^2 reel
 
     z = y.clone()
 
@@ -190,26 +183,25 @@ def test_deblurring_dpir_with_levin09(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # ----- load model -----
+    # load model and weights
     model = DRUNetSigmaMap(in_nc=4, out_nc=3, nc=(64,128,256,512), nb=4).to(device).eval()
     state = torch.load(ckpt_path, map_location=device)
     sd = state["model"] if isinstance(state, dict) and "model" in state else state
     model.load_state_dict(sd, strict=True)
 
-    # ----- load clean image -----
+    # load clean image
     clean_pil = Image.open(clean_path).convert("RGB")
     x = TF.to_tensor(clean_pil).unsqueeze(0).to(device)  # (1,3,H,W)
     B, C, H, W = x.shape
 
-    # ----- load kernel Levin09 -----
+    # load kernel Levin09 for blurring
     k_np = load_levin09_kernel(levin09_path, kernel_index)
     k = torch.from_numpy(k_np).to(device)
 
-    # ----- blur (circular) + add Gaussian noise -----
+    # blurring (circular) + add Gaussian noise
     otf = psf_to_otf(k, (H, W))
     blurry = circ_conv_fft(x, otf)
 
-    # bruit gaussien (compatible anciennes versions torch)
     sigma_n = sigma_img / 255.0
     try:
         g = torch.Generator(device=device).manual_seed(seed)

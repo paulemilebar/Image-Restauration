@@ -6,12 +6,7 @@ import torch.nn.functional as F
 import pandas as pd
 from PIL import Image
 import torchvision.transforms.functional as TF
-try:
-    # Tentative pour quand on lance depuis le Benchmark
-    from DRUNet.DRUNet import DRUNetSigmaMap
-except ModuleNotFoundError:
-    # Repli pour quand on lance le fichier en direct
-    from DRUNet import DRUNetSigmaMap
+from DRUNet import DRUNetSigmaMap
 
 
 def psnr_torch(x01: torch.Tensor, y01: torch.Tensor, eps: float = 1e-8) -> float:
@@ -112,7 +107,7 @@ def add_awgn(clean01: torch.Tensor, sigma: float, seed: int = 0, device: Optiona
 def run_single_image_demo(
     clean_path: str,
     ckpt_path: str,
-    out_dir: str = "results_DRUNET_denoise",
+    out_dir: str = "results_DRUNET_denoise_single",
     sigma: float = 20.0,
     seed: int = 0,
     modulo: int = 8,
@@ -232,13 +227,5 @@ if __name__ == "__main__":
     run_single_image_demo(clean_path="./BSDS300/images/test/37073.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET_denoise_single", sigma=50.0, seed=0)
 
     # 2) Benchmark N images (tableau + CSV)
-  #  benchmark_drunet_random(
-  #      test_dir="./BSDS300/images/test",
-  #      ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-  #      out_dir="results_DRUNET_denoise_benchmark",
-  #      sigma=20.0,
-  #      n_images=20,
-  #      seed=0,
-  #      save_examples=False,
-  #  )
+  #  benchmark_drunet_random(test_dir="./BSDS300/images/test", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET_denoise_benchmark", sigma=20.0, n_images=20, seed=0, save_examples=False)
 

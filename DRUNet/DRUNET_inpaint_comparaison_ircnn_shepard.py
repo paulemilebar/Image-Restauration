@@ -14,9 +14,7 @@ from glob import glob
 import pandas as pd
 
 
-# =========================
 # Utils
-# =========================
 
 def l2norm_flat(x: torch.Tensor) -> torch.Tensor:
     return torch.norm(x.reshape(-1), p=2)
@@ -100,9 +98,7 @@ def make_random_rect_mask(H: int, W: int, missing_ratio: float = 0.2, seed: int 
     return torch.from_numpy(mask).unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
 
 
-# =========================
-# Shepard init (RGB) (ta version)
-# =========================
+# Shepard init (RGB) : Interpolation des points voisins et fait une moyenne de la fenêtre utilisée. Méthode purement analytique sans Deep Learning
 def shepard_initialize_rgb(y01: torch.Tensor, M01: torch.Tensor, window: int = 9, p: float = 2.0) -> torch.Tensor:
     assert window % 2 == 1
     y = y01.squeeze(0).permute(1, 2, 0).detach().cpu().numpy()   # (H,W,3)
@@ -142,9 +138,7 @@ def shepard_initialize_rgb(y01: torch.Tensor, M01: torch.Tensor, window: int = 9
     return z0.clamp(0, 1)
 
 
-# =========================
 # Denoisers (sigma-map)
-# =========================
 @torch.no_grad()
 def drunet_infer(model, inp, modulo: int = 8):
     b, c, h, w = inp.shape
@@ -170,9 +164,7 @@ def denoise_sigma_map(model_name: str, model, x3: torch.Tensor, sigma: float):
         raise ValueError("model_name must be 'drunet' or 'ircnn'")
 
 
-# =========================
 # Schedule DPIR utils_inpaint (ton snippet)
-# =========================
 def get_rho_sigma_dpir(sigma_obs=2.55/255, iter_num=15, modelSigma2=2.55):
     modelSigma1 = 49.0
     modelSigmaS = np.logspace(np.log10(modelSigma1), np.log10(modelSigma2), iter_num).astype(np.float32)
@@ -182,9 +174,7 @@ def get_rho_sigma_dpir(sigma_obs=2.55/255, iter_num=15, modelSigma2=2.55):
     return np.array(rhos, np.float32), np.array(sigmas, np.float32)
 
 
-# =========================
 # DPIR-style PnP-HQS Inpainting
-# =========================
 @torch.no_grad()
 def dpir_hqs_inpaint(
     y: torch.Tensor,     # (1,3,H,W) masked observation (trous=0)
@@ -198,8 +188,6 @@ def dpir_hqs_inpaint(
     shepard_p: float = 2.0,
     add_small_noise_in_holes: float = 0.01,
     seed: int = 0,
-
-    # --- NEW ---
     track_convergence: bool = False,
     gt: torch.Tensor = None,   # (1,3,H,W) ground truth dans [0,1]
 ):
@@ -246,7 +234,7 @@ def dpir_hqs_inpaint(
         # hard enforce known pixels
         z = (M3 * y + (1.0 - M3) * z).clamp(0, 1)
 
-        # --- NEW: ||x_{k+1}-x_k|| / ||x0|| + somme cumulée
+        # ||x_{k+1}-x_k|| / ||x0|| + somme cumulée
         if track_convergence:
             if k == 0:
                 x_prev = xk.clone()
@@ -269,10 +257,6 @@ def dpir_hqs_inpaint(
     return (z, metrics) if track_convergence else z
 
 
-
-# =========================
-# Main compare
-# =========================
 def run_compare(clean_path, out_dir, drunet_ckpt, ircnn_ckpt,
                 missing_ratio=0.15, seed=0,
                 iter_num=15, sigma_obs_pix=5.0, modelSigma2_pix=2.55,
@@ -357,7 +341,7 @@ def run_compare(clean_path, out_dir, drunet_ckpt, ircnn_ckpt,
     print(" ", os.path.join(out_dir, "drunet_rel_step_log.png"))
     print(" ", os.path.join(out_dir, "drunet_cumsum_rel_step.png"))
     
-############## CODE FOR BENCHMARK
+############## CODE FOR BENCHMARK ####################
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff")
 
@@ -476,7 +460,7 @@ def run_compare_return_metrics(
         "time_ircnn_s": t_i,
     }
 
-    # Sauvegardes (optionnelles)
+    # Sauvegardes
     if save_outputs:
         save_img01(gt,  os.path.join(out_dir, "clean.png"))
         save_img01(M3, os.path.join(out_dir, "mask.png"))

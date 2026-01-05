@@ -2,13 +2,11 @@ import os, math
 import numpy as np
 from PIL import Image
 import random
-
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
-
 import matplotlib.pyplot as plt
-
+import pandas as pd
 from DRUNet import DRUNetSigmaMap
 
 def psnr_torch(x, y, eps=1e-12):
@@ -25,7 +23,7 @@ def save_img01(t: torch.Tensor, path: str):
     TF.to_pil_image(t.squeeze(0).clamp(0, 1).cpu()).save(path)
 
 
-# Load kernels_12.mat (paper kernels)
+# Load kernels_12.mat (paper-like kernels)
 def loadmat_any(path: str):
     try:
         import hdf5storage
@@ -43,7 +41,7 @@ def load_kernel12(kernels_mat_path: str, k_index: int) -> np.ndarray:
     return k
 
 
-# DPIR SISR closed-form (Eq. 14) helpers
+# DPIR SISR closed-form (Eq. 14)
 def splits(a: torch.Tensor, sf: int) -> torch.Tensor:
     # a: N x C x H x W -> N x C x (H/sf) x (W/sf) x (sf^2)
     # sf: scale factor
@@ -248,8 +246,6 @@ def run_one(
     plt.grid(True)
     plt.legend()
     plt.show()
-
-import pandas as pd
 
 
 def list_images(folder, exts=(".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")):
