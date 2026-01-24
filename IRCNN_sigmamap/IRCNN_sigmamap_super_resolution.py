@@ -1,4 +1,4 @@
-from IRCNN import IRCNNSigmaMap
+from IRCNN_sigmamap import IRCNNSigmaMap
 import os, random, math, glob
 from PIL import Image
 import torch

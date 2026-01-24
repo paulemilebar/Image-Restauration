@@ -1,4 +1,4 @@
-from IRCNN import IRCNNSigmaMap
+from IRCNN_sigmamap import IRCNNSigmaMap
 import os, random, math
 from PIL import Image
 import torch
@@ -223,7 +223,7 @@ print("Image choisie:", clean_path)
 ckpt_path = r"weights_ircnn_sigmap/ircnn_sigmap_final.pth" 
 
 # 3) Paramètres de flou + bruit pour le test
-out_dir = "IRCNN/results_IRCNN_deblur"
+out_dir = "IRCNN_sigmamap/results_IRCNN_deblur"
 ksize = 19
 blur_sigma = 1.6       # flou gaussien 
 sigma_n_pixels = 2   # bruit rajouté

@@ -6,7 +6,7 @@ from torch.optim import Adam
 from torch.cuda.amp import autocast, GradScaler
 import time
 from tqdm.auto import tqdm
-from IRCNN import RandomPatchSigmaMapDataset, IRCNNSigmaMap
+from IRCNN_sigmamap import RandomPatchSigmaMapDataset, IRCNNSigmaMap
 
 
 # Train

@@ -1,11 +1,6 @@
 import os, math
 import torch
-try:
-    # Tentative pour quand on lance depuis le Benchmark
-    from IRCNN.IRCNN import IRCNNSigmaMap
-except ModuleNotFoundError:
-    # Repli pour quand on lance le fichier en direct
-    from IRCNN import IRCNNSigmaMap
+from IRCNN_sigmamap import IRCNNSigmaMap
 from PIL import Image
 import torchvision.transforms.functional as TF
 
@@ -114,7 +109,7 @@ test_mode_A_clean_to_noisy(
 def denoise_ircnn(
     clean_path,
     ckpt_path=r"./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
-    out_dir=r"./benchmark/denoise",
+    out_dir=r"IRCNN_sigmamap/results_IRCNN_denoise",
     sigma=40,
     seed=0
 ):
@@ -158,7 +153,7 @@ def denoise_ircnn(
     return psnr_noisy, psnr_den
 
 
-'''print(denoise_ircnn(
+denoise_ircnn(
     clean_path=r"./BSDS300/images/test/102061.jpg",
     sigma=20
-))'''
+)

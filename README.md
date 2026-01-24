@@ -105,7 +105,7 @@ Average PSNR (dB) ± std:
 
 - `BSDS300/` : dataset (train and test)
 - `IRCNN/` : IRCNN implementation + training (multi-sigma models)
-- `IRCNN+/` : IRCNN+ implementation (sigma-map conditioning)
+- `IRCNN_sigmamap/` : IRCNN+ implementation (sigma-map conditioning of the IRCNN)
 - `DRUNet/` : DRUNet implementation + training + restoration tasks
 - `benchmark/` : evaluation scripts (PSNR, comparisons, multi-image runs)
 - `kernels/` : blur kernels (e.g., Levin kernels) used for image degradation
