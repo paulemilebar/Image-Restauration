@@ -113,7 +113,10 @@ Average PSNR (dB) ± std:
 - `weights_ircnn_sigmap/` : checkpoints (notably sigma-map conditioned models)
 - `poster_project.png` : project poster
 
----
+## NOTA BENE
+
+The weights of our trained model could have not been pushed to the github because they are too big. We have it in local instead. Don't hesitate to email me, if you want the path.
+
 
 ## References
 
