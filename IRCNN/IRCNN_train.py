@@ -6,7 +6,7 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm
-from IRCNN_v2 import FixedSigmaPatchDataset, IRCNNFixed
+from IRCNN import FixedSigmaPatchDataset, IRCNNFixed
 
 def train_all_experts(
     clean_dir=r"./BSDS300/images/train",

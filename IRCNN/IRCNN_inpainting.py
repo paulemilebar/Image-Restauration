@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 
-from IRCNN_v2 import IRCNNModelManager
+from IRCNN import IRCNNModelManager
 import matplotlib.pyplot as plt
 
 

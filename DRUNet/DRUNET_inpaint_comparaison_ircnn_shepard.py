@@ -223,7 +223,7 @@ def dpir_hqs_inpaint(
         xk = (M3 * y + mu * z) / (M3 + mu)
         xk = xk.clamp(0, 1)
 
-        # --- NEW: PSNR(x_k)
+        # PSNR(x_k)
         if track_convergence and (gt is not None):
             metrics["psnr_x"][k] = psnr_torch(xk, gt)
 
@@ -247,9 +247,7 @@ def dpir_hqs_inpaint(
                 metrics["cumsum"][k - 1] = csum
                 x_prev = xk.clone()
 
-            # on remplit "au fil de l'eau" : pour k=0, rel_step[0] sera rempli au k=1 etc.
 
-    # termine les derniers points (rel_step[K-1]=0, cumsum[K-1]=csum)
     if track_convergence:
         metrics["rel_step"][-1] = 0.0
         metrics["cumsum"][-1] = csum
@@ -304,7 +302,6 @@ def run_compare(clean_path, out_dir, drunet_ckpt, ircnn_ckpt,
         track_convergence=True, gt=gt
     )
 
-    # --- IRCNN sans tracking (ou mets track_convergence=True si tu veux aussi)
     rec_i = dpir_hqs_inpaint(
         y=y, M=M, model_name="ircnn", model=ircnn,
         iter_num=iter_num, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
@@ -314,7 +311,6 @@ def run_compare(clean_path, out_dir, drunet_ckpt, ircnn_ckpt,
     save_img01(rec_d, os.path.join(out_dir, "restored_dpir_hqs_drunet.png"))
     save_img01(rec_i, os.path.join(out_dir, "restored_dpir_hqs_ircnn.png"))
 
-    # --- NEW: save plots dans le même dossier out_dir
     save_convergence_plots(metrics_d, out_dir=out_dir, prefix="drunet")
 
     # Metrics finaux
@@ -386,8 +382,8 @@ def run_compare_return_metrics(
     modelSigma2_pix=2.55,
     shepard_window=21,
     shepard_p=2.0,
-    save_outputs=True,          # <-- NEW
-    save_convergence=True       # <-- NEW (uniquement DRUNet pour l’instant)
+    save_outputs=True,
+    save_convergence=True
 ):
     os.makedirs(out_dir, exist_ok=True)
     device = next(drunet.parameters()).device
@@ -433,7 +429,6 @@ def run_compare_return_metrics(
     )
     t_i = time.perf_counter() - t0
 
-    # métriques globales + sur trous
     miss = (1.0 - M3)
 
     def psnr_on_missing(a, b, missmask, eps=1e-12):
@@ -460,7 +455,6 @@ def run_compare_return_metrics(
         "time_ircnn_s": t_i,
     }
 
-    # Sauvegardes
     if save_outputs:
         save_img01(gt,  os.path.join(out_dir, "clean.png"))
         save_img01(M3, os.path.join(out_dir, "mask.png"))
@@ -496,13 +490,11 @@ def run_pool_10_images(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
 
-    # sélection images
     paths = list_images_in_dir(clean_dir)
     if not paths:
         raise ValueError(f"Aucune image trouvée dans {clean_dir}")
     chosen = pick_n_images(paths, n=n_images, seed=seed)
 
-    # charge modèles une fois
     drunet, ircnn = load_models_once(device, drunet_ckpt, ircnn_ckpt)
 
     rows = []
@@ -530,7 +522,6 @@ def run_pool_10_images(
 
         df = pd.DataFrame(rows)
 
-        # stats globales
         metric_cols = [c for c in df.columns if c.startswith("psnr") or c.startswith("time_")]
         mean_row = {"image": "MEAN"}
         std_row  = {"image": "STD"}
@@ -544,7 +535,6 @@ def run_pool_10_images(
         print("[DONE] CSV saved:", csv_path)
         return df2
     else:
-        # fallback sans pandas
         csv_path = os.path.join(out_root, csv_name)
         keys = list(rows[0].keys())
         with open(csv_path, "w", encoding="utf-8") as f:

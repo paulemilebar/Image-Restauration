@@ -9,7 +9,6 @@ from torch.utils.data import Dataset
 from PIL import Image
 import torchvision.transforms.functional as TF
 
-# Dataset 
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff")
 
@@ -67,10 +66,10 @@ class RandomPatchSigmaMapDataset(Dataset):
 
         clean = TF.to_tensor(img)  # (3,H,W) in [0,1]
 
-        # sigma en "pixel space" 0..50 (paper-like)
+        # sigma in "pixel space" 0..50 (paper-like)
         sigma = random.uniform(self.sigma_min, self.sigma_max)
 
-        # IMPORTANT: PAS DE CLIP DU NOISY (paper-like)
+        # IMPORTANT: NO CLIP OF NOISY (paper-like)
         noise = torch.randn_like(clean) * (sigma / 255.0)
         noisy = clean + noise  # peut sortir de [0,1]
 

@@ -9,7 +9,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 
 # Maintenant tu peux importer
 from IRCNN.IRCNN_denoise import denoise_ircnn
-from IRCNN_v2.IRCNN_denoise_v2 import denoise_ircnnv2
+from IRCNN.IRCNN_denoise import denoise_ircnnv2
 from DRUNet.DRUNet_denoise import denoise_drunet
 
 # Paramètres

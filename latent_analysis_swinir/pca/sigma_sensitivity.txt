@@ -1,7 +1,0 @@
-Cosine similarity to sigma=0.0 (mean over images):
-  sigma   0.0: 1.0000 +/- 0.0000
-  sigma   5.0: 0.9999 +/- 0.0000
-  sigma  15.0: 0.9991 +/- 0.0002
-  sigma  25.0: 0.9977 +/- 0.0003
-  sigma  50.0: 0.9922 +/- 0.0006
-  sigma  70.0: 0.9843 +/- 0.0016

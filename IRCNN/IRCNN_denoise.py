@@ -6,10 +6,10 @@ import torchvision.transforms.functional as TF
 import torch.fft
 try:
     # Tentative pour quand on lance depuis le Benchmark
-    from IRCNN_v2.IRCNN_v2_final import IRCNNModelManager
+    from IRCNN.IRCNN_final import IRCNNModelManager
 except ModuleNotFoundError:
     # Repli pour quand on lance le fichier en direct
-    from IRCNN_v2_final import IRCNNModelManager
+    from IRCNN.IRCNN_final import IRCNNModelManager
 import matplotlib.pyplot as plt
 
 # --- Fonctions Utilitaires ---

@@ -7,7 +7,6 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from DRUNet import RandomPatchSigmaMapDataset, DRUNetSigmaMap
 
-import torchvision.transforms.functional as TF
 
 def train_drunet(
     clean_dir=r"./BSDS300/images/train",
@@ -44,7 +43,6 @@ def train_drunet(
     opt = Adam(model.parameters(), lr=lr0)
     loss_fn = nn.L1Loss()  # paper-like : L1 loss
 
-    # AMP
     if device == "cuda":
         from torch.cuda.amp import GradScaler, autocast
         scaler = GradScaler(enabled=use_amp)

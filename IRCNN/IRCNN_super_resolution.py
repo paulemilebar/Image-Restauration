@@ -4,7 +4,7 @@ import numpy as np
 from PIL import Image
 import torchvision.transforms.functional as TF
 import torch.fft
-from IRCNN_v2 import IRCNNFixed, IRCNNModelManager
+from IRCNN import IRCNNFixed, IRCNNModelManager
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
 

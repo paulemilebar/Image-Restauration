@@ -5,7 +5,7 @@ import torchvision.transforms.functional as TF
 from PIL import Image
 import numpy as np
 import math
-from IRCNN_v2 import IRCNNModelManager
+from IRCNN import IRCNNModelManager
 import matplotlib.pyplot as plt
 
 # --- Fonctions de dégradation ---

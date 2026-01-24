@@ -92,7 +92,7 @@ def load_levin09_kernel(npy_path: str, kernel_index: int) -> np.ndarray:
         k /= s
     return k
 
-# FFT circular convolution utils (uniform blur, circular BC)
+# FFT circular convolution 
 def psf_to_otf(psf: torch.Tensor, out_hw: tuple[int, int]) -> torch.Tensor:
     """
     psf: (kh,kw) real

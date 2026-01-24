@@ -1,155 +1,118 @@
-# PnP Image Restoration with Deep Denoiser Priors — IRCNN vs DRUNet
+# PnP Image Restoration with Deep Denoiser Priors 
+### IRCNN vs. DRUNet (+ IRCNN+ conditioned on sigma map)
 
-Projet de Deep Learning / Image Restoration (CentraleSupélec — Université Paris-Saclay)
+This repository implements a **Plug-and-Play (PnP)** image restoration framework based on **HQS** (Half-Quadratic Splitting) and **learned deep denoiser priors**.  
+We **re-implemented and trained**:
+- **IRCNN** (paper-like, multiple specialized models),
+- **DRUNet** (residual U-Net conditioned on a sigma map),
+- **IRCNN+ (ours)**: an IRCNN variant **conditioned on a sigma map**, similar to DRUNet conditioning.
 
-
-**Objectif :** construire un framework **Plug-and-Play (PnP)** basé sur **HQS** utilisant des **priors de débruitage appris** (IRCNN / IRCNN+sigma map / DRUNet) pour résoudre plusieurs problèmes inverses : **débruitage**, **défloutage**, **super-résolution (SISR)** et **inpainting**.  
-En plus des performances (PSNR), le projet inclut une étude de **convergence** (PSNR(x_k), pas relatifs, RMSE) et une analyse des **représentations latentes** internes de DRUNet (energy maps, top channels, PCA).
+**Tasks covered:** denoising, deblurring, single-image super-resolution (SISR), and inpainting.
 
 ---
 
-## 1) Contexte : Plug-and-Play + HQS
+## Key idea (PnP + HQS)
 
-On considère un modèle de dégradation :
-
+We consider the degradation model:
 \[
 y = Hx + n
 \]
-
-et un objectif MAP :
-
+and solve a MAP-like objective by HQS:
 \[
-\hat x = \arg\min_x \frac12\|y - Hx\|_2^2 + \lambda \phi(x)
+\min_{x,z}\; \frac12\|y-Hx\|_2^2 + \lambda \phi(z) + \frac{\mu}{2}\|z-x\|_2^2
 \]
 
-On introduit une variable auxiliaire `z` et on résout via **Half-Quadratic Splitting (HQS)** :
-
+Alternating updates:
+- **x-step (data fidelity):**
 \[
-\mathcal{L}_{\mu}(x,z)=\frac12\|y-Hx\|_2^2+\lambda\,\phi(z)+\frac{\mu}{2}\|z-x\|_2^2
+x^{k+1} = (H^\top H+\mu_k I)^{-1}(H^\top y+\mu_k z^k)
 \]
-
-Mises à jour alternées :
-
+- **z-step (prior via denoiser):**
 \[
-x^{k+1}=(H^\top H+\mu_k I)^{-1}(H^\top y+\mu_k z^k)
-\]
-
-\[
-z^{k+1}=\arg\min_z \frac12\|z-x^{k+1}\|_2^2+\frac{\lambda}{\mu_k}\phi(z)
-\]
-
-Le **z-step** est équivalent à un **débruitage gaussien** de niveau :
-
-\[
-\sigma_k=\sqrt{\lambda/\mu_k}
-\]
-
-et s’écrit :
-
-\[
-z^{k+1} = D_{\sigma_k}(x^{k+1})
-\]
-
-où \(D_{\sigma}\) est un **débruiteur profond** (IRCNN / DRUNet).
-
----
-
-## 2) Modèles entraînés
-
-Nous comparons 3 débruiteurs CNN :
-
-- **IRCNN** (prior CNN résiduel)
-- **IRCNN + noise level map** (*sigma map*) : entrée 4 canaux (RGB + carte σ)
-- **DRUNet** : **Residual U-Net** conditionné par une **sigma map** (entrée 4 canaux)
-
-💡 La **sigma map** est une carte constante de même taille que l’image (valeur σ/255), concaténée à l’entrée RGB pour conditionner le réseau au niveau de bruit.
-
----
-
-## 3) Dataset & entraînement
-
-- **Dataset :** 400 images naturelles **BSDS300** (train sur patches aléatoires)
-- **Augmentations :** flips, rotations 90°
-- **Corruption :** AWGN avec bruit \(\sigma \sim \mathcal{U}([\sigma_{min}, \sigma_{max}])\)
-- **Optimisation :** Adam
-- **Loss :** \(\ell_1\) entre image débruitée et ground truth :
-
-\[
-\mathcal{L}(\theta)=\|f_\theta(y,\sigma)-x\|_1
+z^{k+1}=D_{\sigma_k}(x^{k+1}),\quad \sigma_k=\sqrt{\lambda/\mu_k}
 \]
 
 ---
 
-## 4) Résultats (poster)
+## Models
 
-PSNR moyen (dB) sur un pool de 20 images (BSDS300 test) :
+### IRCNN
+- Residual CNN denoiser prior.
+- **Paper-like setup:** train **25 specialized models** for discrete noise levels  
+  \(\sigma \in \{2,4,\dots,50\}\).
+- Learns **noise prediction** (predicts noise, not the clean image).
 
-| Method | Denoise σ=20 | Deblur | SISR | Inpaint |
-|---|---:|---:|---:|---:|
-| Degraded | 22.37 | 23.31 | 27.15 | 12.86 |
-| IRCNN | 30.9 | 26.14 | — | — |
-| IRCNN + | 29.91 | 25.50 | — | — |
-| **DRUNet** | **32.8** | **33.63** | **32.22** | **29.22** |
+### IRCNN+ (ours)
+- Same spirit as IRCNN but **conditioned on a sigma map**.
+- Input becomes **4 channels** (RGB + constant sigma map).
+- Goal: a more flexible IRCNN-style denoiser across noise levels.
 
-Notes :
-- SISR “Degraded” = bicubic SR (point de départ).
-- Deblur : kernel Levin.
-- Inpaint : missing ratio ≈ 0.42.
-
----
-
-## 5) Convergence : métriques suivies
-
-En plus du PSNR, on trace plusieurs diagnostics pendant les itérations HQS / DPIR-like :
-
-- **PSNR(x_k)** vs itération  
-- **Relative update** :
-  \[
-  \frac{\|x_{k+1}-x_k\|_2}{\|x_0\|_2}
-  \]
-  (souvent en log-scale)
-- **RMSE** (selon le contexte), par ex :
-  - RMSE(\(x_k - z_k\)) : cohérence data/denoise step
-  - RMSE(\(y - Hx_k\)) : fidélité au modèle de dégradation
-
-Ces courbes permettent de vérifier :
-- stabilisation des itérés,
-- impact des paramètres (\(\lambda\), \(\mu_k\), scheduling de σ),
-- comportement comparé IRCNN vs DRUNet.
+### DRUNet
+- Residual U-Net denoiser, **conditioned on sigma map** (RGB + sigma map).
+- Learns **image prediction** (predicts clean image).
 
 ---
 
-## 6) Analyse des représentations internes (DRUNet latent analysis)
+## Inverse problems implemented
 
-Le repo inclut une analyse “interprétabilité” des activations internes de DRUNet :
+Same PnP solver, only the forward operator \(H\) changes:
 
-### a) Feature maps & Energy maps
-À un niveau interne \(F \in \mathbb{R}^{C \times H \times W}\) (feature maps), on définit une **energy map** :
-
-\[
-E(h,w) = \sqrt{\sum_{c=1}^{C} F_c(h,w)^2}
-\]
-
-Cela résume **où le réseau s’active** (tous canaux confondus).
-
-### b) Top channels
-On visualise des **channels** (feature maps) sélectionnés parmi les \(C\) canaux, typiquement ceux qui ont une forte **variance spatiale** (ils “bougent” beaucoup dans l’image) — pratique pour voir des canaux edge/texture/noise-like.
-
-### c) PCA du bottleneck
-On extrait un embedding du bottleneck (GAP sur `x4`) et on projette en 2D par PCA pour observer la sensibilité des représentations au niveau de bruit σ.
+- **Denoising:** y=x+n
+- **Deblurring:** \(y=k*x+n\) (convolution kernel)  
+- **SISR:** \(y=D(k*x)+n\) (blur + downsampling)  
+- **Inpainting:** \(y=M\odot x+n\) (binary mask)
 
 ---
 
-## 7) Installation
+## Dataset & training
 
-### Prérequis
-- Python ≥ 3.9
-- PyTorch + torchvision
-- numpy, pillow, matplotlib
-- (optionnel) scikit-learn pour PCA
+- **Dataset:** BSDS300 (400 natural images for training).
+- Training uses random clean patches + augmentation (flips + 90° rotations).
+- Noise: AWGN with \(\sigma \sim \mathcal{U}([\sigma_{\min},\sigma_{\max}])\) for conditioned models.
+- **Optimizer:** Adam  
+- **Loss:** L1
 
-Exemple :
-```bash
-pip install -r requirements.txt
+Targets:
+- IRCNN → **noise target**
+- DRUNet → **clean image target**
+
+---
+
+## Results (PSNR on 20 BSDS300 test images)
+
+Average PSNR (dB) ± std:
+
+| Method   | Denoise (σ=20) | Deblur (Levin kernel, σ=5) | SISR (Levin kernel, ×2) | Inpainting (missing=0.15, σ=2) |
+|----------|------------------|----------------------------|--------------------------|--------------------------------|
+| Degraded | 22.36 ± 0.27     | 22.47 ± 3.27               | 25.19 ± 2.81             | 15.53 ± 1.55                   |
+| IRCNN    | 29.91 ± 1.11     | 24.80 ± 1.20               | 29.65 ± 3.71             | 30.12 ± 2.08                   |
+| IRCNN+   | 29.11 ± 1.11     | 25.26 ± 3.05               | 29.83 ± 3.45             | 26.95 ± 1.59                   |
+| DRUNet   | **31.70 ± 1.93** | **30.18 ± 3.77**           | **30.01 ± 3.71**         | **30.30 ± 2.08**               |
+
+**Overall:** DRUNet performs best across all tasks in our experiments.
+
+---
+
+## Repository structure
+
+From the repo layout:
+
+- `BSDS300/` : datasets (train and test)
+- `IRCNN/` : IRCNN implementation + training (multi-sigma models)
+- `IRCNN+/` : IRCNN+ implementation (sigma-map conditioning)
+- `DRUNet/` : DRUNet implementation + training + restauration tasks
+- `benchmark/` : evaluation scripts (PSNR, comparisons, multi-image runs)
+- `kernels/` : blur kernels (e.g., Levin kernels) we used fro degradation image
+- `results_DRUNET/` : saved results / plots / reconstructions
+- `weights_ircnn_sigmap/` : checkpoints (notably sigma-map conditioned models)
+- `poster_project.png` : project poster
+
+---
+
+# References
+
+Kai Zhang, Wangmeng Zuo, Shuhang Gu, Lei Zhang. Learning Deep CNN Denoiser Prior for Image Restoration (2017)
+
+Kai Zhang, Yawei Li, Wangmeng Zuo. Plug-and-Play Image Restoration with Deep Denoiser Prior (2021)
 
 

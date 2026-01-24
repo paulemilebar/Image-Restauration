@@ -11,17 +11,9 @@ import torchvision.transforms.functional as TF
 
 import matplotlib.pyplot as plt
 
-# sklearn (PCA) optionnel
-try:
-    from sklearn.decomposition import PCA
-    SKLEARN_OK = True
-except Exception:
-    SKLEARN_OK = False
+from sklearn.decomposition import PCA
 
 
-# -------------------------
-# Utils I/O
-# -------------------------
 IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff")
 
 def list_images(root):
@@ -57,9 +49,7 @@ def seed_all(seed=0):
     torch.cuda.manual_seed_all(seed)
 
 
-# -------------------------
 # Noise + input builder
-# -------------------------
 def add_awgn(clean_01, sigma_pixels, generator=None):
     """
     clean_01: (1,3,H,W) in [0,1]
@@ -92,9 +82,7 @@ def build_inp(noisy, sigma_pixels):
     return torch.cat([noisy, sigma_map], dim=1)
 
 
-# -------------------------
 # Forward with latents
-# -------------------------
 @torch.no_grad()
 def forward_collect(model, inp):
     """
@@ -135,9 +123,7 @@ def forward_collect(model, inp):
     return out, acts
 
 
-# -------------------------
 # Pad helpers
-# -------------------------
 def _pad_to_multiple(x: torch.Tensor, mult: int = 8):
     _, _, h, w = x.shape
     pad_h = (mult - h % mult) % mult
@@ -157,9 +143,7 @@ def _unpad(x: torch.Tensor, pads):
     return x[:, :, pt:x.shape[2]-pb, pl:x.shape[3]-pr]
 
 
-# -------------------------
 # Filter visualizations
-# -------------------------
 def plot_head_filters(model, out_path_png):
     """
     head.weight: (64,4,3,3)
@@ -253,9 +237,7 @@ def plot_weight_stats(model, out_path_png):
     plt.close(fig)
 
 
-# -------------------------
 # Latent visualizations
-# -------------------------
 def feature_energy_map(feat_bchw):
     """
     feat: (1,C,H,W)
@@ -362,18 +344,13 @@ def save_latent_pack(acts, out_dir, prefix, corr_thr=0.90):
         )
 
 
-# -------------------------
 # PCA embedding (bottleneck)
-# -------------------------
 def bottleneck_embedding(acts):
     x4 = acts["x4"]  # (1,C,H,W)
     emb = F.adaptive_avg_pool2d(x4, 1).view(-1)  # (C,)
     return emb.detach().cpu().numpy()
 
 def plot_pca(embeddings, sigmas, out_png, title):
-    if not SKLEARN_OK:
-        print("[WARN] sklearn not available -> skip PCA plot")
-        return
     X = np.stack(embeddings, axis=0)
     pca = PCA(n_components=2, random_state=0)
     Z = pca.fit_transform(X)
@@ -391,9 +368,6 @@ def plot_pca(embeddings, sigmas, out_png, title):
     plt.close(fig)
 
 
-# -------------------------
-# Main
-# -------------------------
 def main(
     clean_dir=r"./BSDS300/images/test",
     exemplar_name="37073.jpg",
@@ -468,33 +442,29 @@ def main(
 
     # ---- optional PCA on multiple images x sigmas
     if also_run_pca:
-        if not SKLEARN_OK:
-            print("[WARN] sklearn not available -> skip PCA")
-        else:
-            # pick images for PCA (include exemplar if possible)
-            all_paths = paths.copy()
-            random.shuffle(all_paths)
-            chosen = all_paths[:min(n_images_for_pca, len(all_paths))]
-            if exemplar_path not in chosen:
-                chosen[0] = exemplar_path
+        all_paths = paths.copy()
+        random.shuffle(all_paths)
+        chosen = all_paths[:min(n_images_for_pca, len(all_paths))]
+        if exemplar_path not in chosen:
+            chosen[0] = exemplar_path
 
-            embeddings, sig_list = [], []
-            for p in chosen:
-                pil = Image.open(p).convert("RGB")
-                clean_i = to_tensor01(pil).unsqueeze(0).to(device)
-                for s in sigmas:
-                    noisy = add_awgn(clean_i, s, generator=g)
-                    inp = build_inp(noisy, s)
-                    _, acts = forward_collect(model, inp)
-                    embeddings.append(bottleneck_embedding(acts))
-                    sig_list.append(float(s))
+        embeddings, sig_list = [], []
+        for p in chosen:
+            pil = Image.open(p).convert("RGB")
+            clean_i = to_tensor01(pil).unsqueeze(0).to(device)
+            for s in sigmas:
+                noisy = add_awgn(clean_i, s, generator=g)
+                inp = build_inp(noisy, s)
+                _, acts = forward_collect(model, inp)
+                embeddings.append(bottleneck_embedding(acts))
+                sig_list.append(float(s))
 
-            plot_pca(
+        plot_pca(
                 embeddings, sig_list,
                 os.path.join(out_dir, "pca", "pca_bottleneck_by_sigma.png"),
                 title=f"DRUNet bottleneck PCA2D | {len(chosen)} images x {len(sigmas)} sigmas"
-            )
-            print("[OK] PCA saved.")
+        )
+        print("[OK] PCA saved.")
 
     print("[DONE] outputs in:", out_dir)
 
@@ -507,6 +477,6 @@ if __name__ == "__main__":
         out_dir=r"results_DRUNET/results_DRUNET_latent_analysis_37073",
         sigmas=(0.0, 5.0, 15.0, 25.0, 50.0, 70.0),
         corr_thr=0.90,
-        also_run_pca=False,  # mets True si tu veux aussi le PCA multi-images
+        also_run_pca=False,
         n_images_for_pca=25,
     )

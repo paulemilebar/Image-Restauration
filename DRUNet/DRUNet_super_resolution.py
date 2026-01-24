@@ -424,7 +424,7 @@ def benchmark_sisr_10_random_to_csv(
     return df, csv_path
 
 if __name__ == "__main__":
-    # ton test 1 image
+    # test for 1 image
 #    run_one(
 #        clean_path="./BSDS300/images/test/37073.jpg",
 #        ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
@@ -434,7 +434,7 @@ if __name__ == "__main__":
 #        iter_num=24,
 #    )
 
-    # benchmark 10 images
+    # benchmark for 10 images
     benchmark_sisr_10_random_to_csv(
         test_dir="./BSDS300/images/test",
         ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
