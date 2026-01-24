@@ -104,9 +104,9 @@ Average PSNR (dB) ± std:
 ## Repository structure
 
 - `BSDS300/` : dataset (train and test)
-- `IRCNN/` : IRCNN implementation + training (multi-sigma models)
-- `IRCNN_sigmamap/` : IRCNN+ implementation (sigma-map conditioning of the IRCNN)
-- `DRUNet/` : DRUNet implementation + training + restoration tasks
+- `IRCNN/` : IRCNN implementation + training (multi-sigma models) + restauration tasks
+- `IRCNN_sigmamap/` : IRCNN+ implementation (sigma-map conditioning of the IRCNN) + restauration tasks
+- `DRUNet/` : DRUNet implementation + training + restauration tasks
 - `benchmark/` : evaluation scripts (PSNR, comparisons, multi-image runs)
 - `kernels/` : blur kernels (e.g., Levin kernels) used for image degradation
 - `results_DRUNET/` : saved results / plots / reconstructions
