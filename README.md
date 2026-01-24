@@ -3,12 +3,12 @@
 
 This repository implements a **Plug-and-Play (PnP)** image restoration framework based on **HQS** (Half-Quadratic Splitting) and **learned deep denoiser priors**.
 
-We **re-implemented and trained**:
-- **IRCNN** (paper-like: multiple specialized models),
+We **re-implemented from scratch and trained the 3 deep learned denoiser**:
+- **IRCNN** (multiple CNN specialized models),
 - **DRUNet** (residual U-Net conditioned on a sigma map),
 - **IRCNN+ (ours)**: an IRCNN variant **conditioned on a sigma map**, similar to DRUNet conditioning.
 
-**Tasks covered:** denoising, deblurring, single-image super-resolution (SISR), and inpainting.
+**Image restauration Tasks covered:** denoising, deblurring, single-image super-resolution (SISR), and inpainting.
 
 ---
 
