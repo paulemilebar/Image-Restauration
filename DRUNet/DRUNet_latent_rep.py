@@ -31,6 +31,28 @@ def seed_all(seed=0):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    
+def add_awgn(clean_01, sigma_pixels, generator=None):
+    """
+    clean_01: (1,3,H,W) in [0,1]
+    sigma_pixels: float
+    generator: torch.Generator optionnel (CPU uniquement)
+    """
+    sigma = float(sigma_pixels) / 255.0
+
+    if clean_01.device.type == "cuda":
+        noise = torch.randn_like(clean_01) * sigma
+    else:
+        if generator is None:
+            noise = torch.randn(clean_01.shape, device=clean_01.device, dtype=clean_01.dtype) * sigma
+        else:
+            noise = torch.randn(
+                clean_01.shape,
+                device=clean_01.device,
+                dtype=clean_01.dtype,
+                generator=generator
+            ) * sigma
+    return clean_01 + noise
 
 def build_inp(noisy, sigma_pixels):
     """
