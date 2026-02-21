@@ -5,8 +5,8 @@ import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 from DRUNet import DRUNetSigmaMap
-from DRUNet_denoise import psnr_torch
-from DRUNet_super_resolution import psnr_torch, save_img01
+from DRUNet_denoise import psnr_torch, ssim_torch
+from DRUNet_super_resolution import save_img01
 import matplotlib.pyplot as plt
 import time
 from glob import glob
@@ -21,6 +21,7 @@ def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "drunet"):
     """
     metrics:
       psnr_x:   list length K
+      ssim_x: list length K
       rel_step: list length K (rel_step[k] = ||x_{k+1}-x_k|| / ||x0|| for k<=K-2, rel_step[K-1]=0)
       cumsum:   list length K (cumsum[k] = sum_{i<=k} rel_step[i])
     """
@@ -36,6 +37,15 @@ def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "drunet"):
     plt.grid(True)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, f"{prefix}_psnr_xk.png"), dpi=200)
+    plt.close()
+    
+    plt.figure()
+    plt.plot(it, metrics["ssim_x"])
+    plt.xlabel("itération k")
+    plt.ylabel("SSIM(x_k, GT) [dB]")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, f"{prefix}_ssim_xk.png"), dpi=200)
     plt.close()
 
     # --- 2) ||x_{k+1}-x_k|| / ||x0|| (log scale)
@@ -190,6 +200,7 @@ def dpir_hqs_inpaint(
     if track_convergence:
         metrics = {
             "psnr_x":   [0.0] * iter_num,
+            "ssim_x":   [0.0] * iter_num,
             "rel_step": [0.0] * iter_num,
             "cumsum":   [0.0] * iter_num,
         }
@@ -204,9 +215,10 @@ def dpir_hqs_inpaint(
         xk = (M3 * y + mu * z) / (M3 + mu)
         xk = xk.clamp(0, 1)
 
-        # PSNR(x_k)
+        # PSNR(x_k) and SSIM
         if track_convergence and (gt is not None):
             metrics["psnr_x"][k] = psnr_torch(xk, gt)
+            metrics["ssim_x"][k] = ssim_torch(xk, gt)
 
         # z-step
         sigma_k = float(sigmas[k])  # déjà normalisé [0,1]
@@ -295,12 +307,19 @@ def run_compare(clean_path, out_dir, drunet_ckpt,
     print("  input        :", f"{psnr_torch(y, gt):.2f} dB")
     print("  shepard-only :", f"{psnr_torch(rec_sh, gt):.2f} dB")
     print("  DPIR+DRUNet  :", f"{psnr_torch(rec_d, gt):.2f} dB")
+    print("SSIM global:")
+    print("  input        :", f"{ssim_torch(y, gt):.2f}")
+    print("  shepard-only :", f"{ssim_torch(rec_sh, gt):.2f}")
+    print("  DPIR+DRUNet  :", f"{ssim_torch(rec_d, gt):.2f}")
+    
     print("PSNR missing:")
     print("  input        :", f"{psnr_on_missing(y,      gt, miss):.2f} dB")
     print("  shepard-only :", f"{psnr_on_missing(rec_sh, gt, miss):.2f} dB")
     print("  DPIR+DRUNet  :", f"{psnr_on_missing(rec_d,  gt, miss):.2f} dB")
+    
     print("Convergence plots saved:")
     print(" ", os.path.join(out_dir, "drunet_psnr_xk.png"))
+    print(" ", os.path.join(out_dir, "drunet_ssim_xk.png"))
     print(" ", os.path.join(out_dir, "drunet_rel_step_log.png"))
     print(" ", os.path.join(out_dir, "drunet_cumsum_rel_step.png"))
     
@@ -401,6 +420,9 @@ def run_compare_return_metrics(
         "psnr_input": psnr_torch(y, gt),
         "psnr_shepard": psnr_torch(rec_sh, gt),
         "psnr_dpir_drunet": psnr_torch(rec_d, gt),
+        "ssim_input": ssim_torch(y, gt),
+        "ssim_shepard": ssim_torch(rec_sh, gt),
+        "ssim_dpir_drunet": ssim_torch(rec_d, gt),
         "psnr_miss_input": psnr_on_missing(y, gt, miss),
         "psnr_miss_shepard": psnr_on_missing(rec_sh, gt, miss),
         "psnr_miss_dpir_drunet": psnr_on_missing(rec_d, gt, miss),
@@ -466,58 +488,50 @@ def run_pool_10_images(
         )
         rows.append(r)
 
-        df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
 
-        metric_cols = [c for c in df.columns if c.startswith("psnr") or c.startswith("time_")]
-        mean_row = {"image": "MEAN"}
-        std_row  = {"image": "STD"}
-        for c in metric_cols:
-            mean_row[c] = float(df[c].mean())
-            std_row[c]  = float(df[c].std())
-        df2 = pd.concat([df, pd.DataFrame([mean_row, std_row])], ignore_index=True)
+    metric_cols = [c for c in df.columns if c.startswith("psnr") or c.startswith("time_") or c.startswith("ssim")]
+    mean_row = {"image": "MEAN"}
+    std_row  = {"image": "STD"}
+    for c in metric_cols:
+        mean_row[c] = float(df[c].mean())
+        std_row[c]  = float(df[c].std())
+    df2 = pd.concat([df, pd.DataFrame([mean_row, std_row])], ignore_index=True)
 
-        csv_path = os.path.join(out_root, csv_name)
-        df2.to_csv(csv_path, index=False)
-        print("[DONE] CSV saved:", csv_path)
-        return df2
-    else:
-        csv_path = os.path.join(out_root, csv_name)
-        keys = list(rows[0].keys())
-        with open(csv_path, "w", encoding="utf-8") as f:
-            f.write(",".join(keys) + "\n")
-            for r in rows:
-                f.write(",".join(str(r[k]) for k in keys) + "\n")
-        print("[DONE] CSV saved:", csv_path, "(pandas non dispo)")
-        return rows
+    csv_path = os.path.join(out_root, csv_name)
+    df2.to_csv(csv_path, index=False)
+    print("[DONE] CSV saved:", csv_path)
+    
+    return df2
 
 
-run_compare(
-        clean_path=r"./BSDS300/images/test/37073.jpg",
-        out_dir="results_DRUNET/results_DRUNET_SHEPARD_inpaint",
+#run_compare(
+ #       clean_path=r"./BSDS300/images/test/37073.jpg",
+ #       out_dir="results_DRUNET/results_DRUNET_SHEPARD_inpaint",
+ #       drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
+  #      missing_ratio=0.45,
+   #     seed=0,
+    #    iter_num=20,
+    #    sigma_obs_pix=5.0,
+    #    modelSigma2_pix=2.55,   
+    #    shepard_window=11,
+    #    shepard_p=2.0,
+    #)
+    
+    
+df = run_pool_10_images(
+        clean_dir=r"./BSDS300/images/test",
+        out_root="results_DRUNET/results_DRUNET_inpaint_benchmark",
         drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
-        missing_ratio=0.45,
+        n_images=10,
         seed=0,
+        missing_ratio=0.42,
         iter_num=20,
         sigma_obs_pix=5.0,
-        modelSigma2_pix=2.55,   
-        shepard_window=11,
+        modelSigma2_pix=2.55,
+        shepard_window=21,
         shepard_p=2.0,
+        save_outputs_per_image=False,
+        save_convergence=False,
+        csv_name="pool10_metrics.csv"
     )
-    
-    
- #   df = run_pool_10_images(
- #       clean_dir=r"./BSDS300/images/test",
- #       out_root="results_DRUNET/results_DRUNET_inpaint_benchmark",
- #       drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
- #       n_images=10,
- #       seed=0,
- #       missing_ratio=0.42,
- #       iter_num=20,
- #       sigma_obs_pix=5.0,
- #       modelSigma2_pix=2.55,
- #       shepard_window=21,
- #       shepard_p=2.0,
- #       save_outputs_per_image=False,
- #       save_convergence=False,
- #       csv_name="pool10_metrics.csv"
- #   )

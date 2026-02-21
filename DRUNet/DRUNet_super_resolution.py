@@ -1,5 +1,5 @@
 import os
-from DRUNet_denoise import psnr_torch, list_images
+from DRUNet_denoise import psnr_torch, ssim_torch, list_images
 import numpy as np
 from PIL import Image
 import random
@@ -193,11 +193,17 @@ def run_one(
 
     psnr_bic = psnr_torch(z.cpu(), x.cpu())
     print(f"PSNR bicubic (z0): {psnr_bic:.2f} dB")
+    
+    ssim_bic = ssim_torch(z.cpu(), x.cpu())
+    print(f"SSIM bicubic (z0): {ssim_bic:.2f}")
 
 
     # ---- iterations: x_k (closed-form) then z_k (DRUNet) ----
     psnr_x = []
     psnr_z = []
+    
+    ssim_x = []
+    ssim_z = []
 
     for i in range(iter_num):
         alpha = rhos_t[i].view(1, 1, 1, 1)
@@ -212,6 +218,8 @@ def run_one(
 
         psnr_x.append(psnr_torch(xk.cpu(), x.cpu()))
         psnr_z.append(psnr_torch(z.cpu(),  x.cpu()))
+        ssim_x.append(ssim_torch(xk.cpu(), x.cpu()))
+        ssim_z.append(ssim_torch(z.cpu(),  x.cpu()))
 
     # ---- save restored ----
     save_img01(z, os.path.join(out_dir, "restored.png"))
@@ -219,6 +227,7 @@ def run_one(
     print("Saved to:", out_dir)
     print("Shapes HR / LR / Restored:", tuple(x.shape), tuple(y.shape), tuple(z.shape))
     print(f"Final PSNR (z_K): {psnr_z[-1]:.2f} dB")
+    print(f"Final SSIM (z_K): {ssim_z[-1]:.2f}")
 
     # ---- plot PSNR curves ----
     it = np.arange(1, iter_num + 1)
@@ -230,6 +239,22 @@ def run_one(
     plt.title(f"DPIR SISR PSNR curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
     plt.grid(True)
     plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "psnr_curves.png"), dpi=200)
+    plt.show()
+    
+    # ---- plot SSIM curves ----
+    it = np.arange(1, iter_num + 1)
+    plt.figure()
+    plt.plot(it, ssim_x, label="SSIM(x_k)  (data step)")
+    plt.plot(it, ssim_z, label="SSIM(z_k)  (after DRUNet)")
+    plt.xlabel("Iteration k")
+    plt.ylabel("SSIM")
+    plt.title(f"DPIR SISR SSIM curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "ssim_curves.png"), dpi=200)
     plt.show()
 
 
@@ -288,6 +313,7 @@ def run_one_metrics_sisr(
     z = shift_pixel_torch(z, sf=scale, upper_left=True).clamp(0, 1)
 
     psnr_bic = psnr_torch(z.detach().cpu(), x.detach().cpu())
+    ssim_bic = ssim_torch(z.detach().cpu(), x.detach().cpu())
 
     # ---- DPIR params ----
     noise_level_model = sigma_n
@@ -311,6 +337,7 @@ def run_one_metrics_sisr(
         z = drunet_infer(model, inp, modulo=8).clamp(0, 1)
 
     psnr_final = psnr_torch(z.detach().cpu(), x.detach().cpu())
+    ssim_final = ssim_torch(z.detach().cpu(), x.detach().cpu())
 
     # ---- optional save ----
     if save_images and out_dir is not None:
@@ -331,6 +358,9 @@ def run_one_metrics_sisr(
         "psnr_bicubic_db": float(psnr_bic),
         "psnr_restored_db": float(psnr_final),
         "gain_db": float(psnr_final - psnr_bic),
+        "ssim_bicubic": float(ssim_bic),
+        "ssim_restored": float(ssim_final),
+        "ssim_gain": float(ssim_final - ssim_bic),
     }
 
 
@@ -386,7 +416,8 @@ def benchmark_sisr_10_random_to_csv(
         )
         rows.append(row)
         print(f"[{i+1}/{n_images}] {row['filename']} | bic {row['psnr_bicubic_db']:.2f} -> restored {row['psnr_restored_db']:.2f} dB")
-
+        print(f"[{i+1}/{n_images}] {row['filename']} | bic {row['ssim_bicubic']:.2f} -> restored {row['ssim_restored']:.2f}")
+    
     df = pd.DataFrame(rows)
     csv_path = os.path.join(out_dir, f"sisr_benchmark_{n_images}imgs_sf{scale}_sig{sigma_img}_k{k_index}_K{iter_num}_seed{seed}.csv")
     df.to_csv(csv_path, index=False)
@@ -395,32 +426,35 @@ def benchmark_sisr_10_random_to_csv(
     print(f"PSNR bicubic  : {df['psnr_bicubic_db'].mean():.2f} dB")
     print(f"PSNR restored : {df['psnr_restored_db'].mean():.2f} dB")
     print(f"Gain          : {df['gain_db'].mean():.2f} dB")
+    print(f"SSIM bicubic  : {df['ssim_bicubic'].mean():.2f} dB")
+    print(f"SSIM restored : {df['ssim_restored'].mean():.2f} dB")
+    print(f"Gain  SSIM        : {df['ssim_gain'].mean():.2f} dB")
     print("CSV saved:", csv_path)
 
     return df, csv_path
 
 if __name__ == "__main__":
     # test for 1 image
-    run_one(
-        clean_path="./BSDS300/images/test/37073.jpg",
+#    run_one(
+#        clean_path="./BSDS300/images/test/37073.jpg",
+#        ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
+#        out_dir="results_DRUNET/results_DRUNET_superresolution",
+#        scale=2,
+#        sigma_img=0,
+#        iter_num=24,
+#    )
+
+    # benchmark for 10 images
+    benchmark_sisr_10_random_to_csv(
+        test_dir="./BSDS300/images/test",
         ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-        out_dir="results_DRUNET/results_DRUNET_superresolution",
+        out_dir="results_DRUNET/results_DRUNET_superresolution_benchmark",
+        n_images=10,
+        seed=0,
         scale=2,
         sigma_img=0,
         iter_num=24,
+        kernels_mat_path="kernels/kernels_12.mat",
+        k_index=2,
+        save_examples=False,
     )
-
-    # benchmark for 10 images
- #   benchmark_sisr_10_random_to_csv(
- #       test_dir="./BSDS300/images/test",
-  #      ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-  #      out_dir="results_DRUNET/results_DRUNET_superresolution_benchmark",
-  #      n_images=10,
-   ##     seed=0,
-    #    scale=2,
-     #   sigma_img=0,
-      #  iter_num=24,
-       # kernels_mat_path="kernels/kernels_12.mat",
-       # k_index=2,
-       # save_examples=False,
-    #)

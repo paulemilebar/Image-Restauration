@@ -11,12 +11,6 @@ import torchvision.transforms.functional as TF
 IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff")
 
 class RandomPatchSigmaMapDataset(Dataset):
-    """
-    Randomly sample patches from clean images and add Gaussian noise with random sigma.
-    Returns:
-      inp   (4,H,W) = noisy_rgb (3) + sigma_map (1)
-      clean (3,H,W)
-    """
     def __init__(self, clean_dir: str, patch: int = 30, sigma_min: float = 0.0, sigma_max: float = 50.0):
         self.paths = [
             os.path.join(clean_dir, f) for f in os.listdir(clean_dir)

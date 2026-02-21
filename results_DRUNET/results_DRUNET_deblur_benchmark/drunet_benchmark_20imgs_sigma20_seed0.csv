@@ -1,9 +1,0 @@
-idx,filename,path,sigma,psnr_blurry_db,psnr_restored_db
-0,241004.jpg,./BSDS300/images/test\241004.jpg,20.0,25.31,34.95
-1,87046.jpg,./BSDS300/images/test\87046.jpg,20.0,21.58,31.70
-2,260058.jpg,./BSDS300/images/test\260058.jpg,20.0,28.43,33.49
-3,106024.jpg,./BSDS300/images/test\106024.jpg,20.0,26.95,36.58
-4,182053.jpg,./BSDS300/images/test\182053.jpg,20.0,20.54,31.43
-5,306005.jpg,./BSDS300/images/test\306005.jpg,20.0,23.30,32.26
-6,302008.jpg,./BSDS300/images/test\302008.jpg,20.0,21.47,36.92
-7,253027.jpg,./BSDS300/images/test\253027.jpg,20.0,18.97,31.77

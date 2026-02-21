@@ -6,13 +6,15 @@ import pandas as pd
 from PIL import Image
 import torchvision.transforms.functional as TF
 from DRUNet import DRUNetSigmaMap
+from torchmetrics.functional.image.ssim import structural_similarity_index_measure as ssim_fn
 
 
 def psnr_torch(x01: torch.Tensor, y01: torch.Tensor, eps: float = 1e-8) -> float:
-    """x01,y01: (1,3,H,W) in [0,1]"""
     mse = torch.mean((x01 - y01) ** 2).item()
     return 10.0 * math.log10(1.0 / (mse + eps))
 
+def ssim_torch(x, y, data_range=1.0):
+    return float(ssim_fn(x, y, data_range=data_range).item())
 
 def list_images(folder: str, exts=(".png", ".jpg", ".jpeg")) -> List[str]:
     paths = []
@@ -98,6 +100,9 @@ def run_single_image_demo(
     noisy_clamped = noisy.cpu().clamp(0.0, 1.0)
     psnr_noisy = psnr_torch(noisy_clamped, clean)
     psnr_den = psnr_torch(den, clean)
+    
+    ssim_noisy = ssim_torch(noisy_clamped, clean)
+    ssim_den = ssim_torch(den, clean)
 
     TF.to_pil_image(clean.squeeze(0)).save(os.path.join(out_dir, "clean.png"))
     TF.to_pil_image(noisy_clamped.squeeze(0)).save(os.path.join(out_dir, f"noisy_sigma{int(sigma)}.png"))
@@ -106,8 +111,10 @@ def run_single_image_demo(
     print("Saved to:", out_dir)
     print(f"PSNR noisy   : {psnr_noisy:.2f} dB")
     print(f"PSNR denoised: {psnr_den:.2f} dB")
+    print(f"SSIM noisy   : {ssim_noisy:.2f}")
+    print(f"SSIM denoised: {ssim_den:.2f}")
 
-    return {"psnr_noisy": psnr_noisy, "psnr_denoised": psnr_den}
+    return {"psnr_noisy": psnr_noisy, "psnr_denoised": psnr_den, "ssim_noisy": ssim_noisy, "ssim_denoised": ssim_den}
 
 
 @torch.no_grad()
@@ -148,6 +155,9 @@ def benchmark_drunet_random(
         noisy_clamped = noisy.cpu().clamp(0.0, 1.0)
         psnr_noisy = psnr_torch(noisy_clamped, clean)
         psnr_den = psnr_torch(den, clean)
+        
+        ssim_noisy = ssim_torch(noisy_clamped, clean)
+        ssim_den = ssim_torch(den, clean)
 
         rows.append({
             "idx": i,
@@ -157,6 +167,9 @@ def benchmark_drunet_random(
             "psnr_noisy_db": psnr_noisy,
             "psnr_denoised_db": psnr_den,
             "gain_db": psnr_den - psnr_noisy,
+            "ssim_noisy": ssim_noisy,
+            "ssim_denoised": ssim_den,
+            "gain_ssim": ssim_den - ssim_noisy,
         })
 
         if save_examples:
@@ -167,9 +180,13 @@ def benchmark_drunet_random(
 
     df = pd.DataFrame(rows)
 
-    mean_noisy = df["psnr_noisy_db"].mean()
-    mean_den = df["psnr_denoised_db"].mean()
-    mean_gain = df["gain_db"].mean()
+    mean_noisy_psnr = df["psnr_noisy_db"].mean()
+    mean_den_psnr = df["psnr_denoised_db"].mean()
+    mean_gain_psnr = df["gain_db"].mean()
+    
+    mean_noisy_ssim = df["ssim_noisy"].mean()
+    mean_den_ssim = df["ssim_denoised"].mean()
+    mean_gain_ssim = df["gain_ssim"].mean()
 
     csv_path = os.path.join(out_dir, f"drunet_benchmark_{n_images}imgs_sigma{int(sigma)}_seed{seed}.csv")
     df.to_csv(csv_path, index=False)
@@ -182,11 +199,15 @@ def benchmark_drunet_random(
     print(f"CSV saved: {csv_path}")
 
     print("\nMoyennes:")
-    print(f"  PSNR noisy    : {mean_noisy:.2f} dB")
-    print(f"  PSNR denoised : {mean_den:.2f} dB")
-    print(f"  Gain          : {mean_gain:.2f} dB")
+    print(f"  PSNR noisy    : {mean_noisy_psnr:.2f} dB")
+    print(f"  PSNR denoised : {mean_den_psnr:.2f} dB")
+    print(f"  Gain PSNR         : {mean_gain_psnr:.2f} dB")
+    
+    print(f"  SSIM noisy    : {mean_noisy_ssim:.2f}")
+    print(f"  SSIM denoised : {mean_den_ssim:.2f}")
+    print(f"  Gain SSIM         : {mean_gain_ssim:.2f}")
 
-    show_cols = ["idx", "filename", "sigma", "psnr_noisy_db", "psnr_denoised_db", "gain_db"]
+    show_cols = ["idx", "filename", "sigma", "psnr_noisy_db", "psnr_denoised_db", "gain_db", "ssim_noisy", "ssim_denoised", "gain_ssim"]
     print("\nTableau (par image):")
     print(df[show_cols].to_string(index=False, justify="left", float_format=lambda x: f"{x:0.2f}"))
 
@@ -195,8 +216,8 @@ def benchmark_drunet_random(
 
 if __name__ == "__main__":
     # 1) One image (qualitative + PSNR + saves)
-    run_single_image_demo(clean_path="./BSDS300/images/test/37073.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_single", sigma=70.0, seed=0)
+    #run_single_image_demo(clean_path="./BSDS300/images/test/37073.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_single", sigma=70.0, seed=0)
 
     # 2) Benchmark N images (table + CSV)
-  #  benchmark_drunet_random(test_dir="./BSDS300/images/test", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_benchmark", sigma=20.0, n_images=20, seed=0, save_examples=False)
+    benchmark_drunet_random(test_dir="./BSDS300/images/test", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_benchmark", sigma=20.0, n_images=10, seed=0, save_examples=False)
 

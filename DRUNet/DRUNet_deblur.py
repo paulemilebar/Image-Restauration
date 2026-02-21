@@ -1,5 +1,5 @@
 import os, random
-from DRUNet_denoise import psnr_torch, list_images
+from DRUNet_denoise import psnr_torch, ssim_torch, list_images
 import torch
 import pandas as pd
 from PIL import Image
@@ -132,6 +132,9 @@ def test_deblurring_dpir_with_levin09(
     # ----- metrics -----
     psnr_blur = psnr_torch(y.detach().cpu(), x.detach().cpu())
     psnr_rec  = psnr_torch(x_hat.detach().cpu(), x.detach().cpu())
+    
+    ssim_blur = ssim_torch(y.detach().cpu(), x.detach().cpu())
+    ssim_rec  = ssim_torch(x_hat.detach().cpu(), x.detach().cpu())
 
     # ----- save results -----
     TF.to_pil_image(x.squeeze(0).cpu()).save(os.path.join(out_dir, "clean.png"))
@@ -149,6 +152,8 @@ def test_deblurring_dpir_with_levin09(
     print(f"DPIR n_iter      : {n_iter}, lambda={lam}")
     print(f"PSNR blurry/noisy: {psnr_blur:.2f} dB")
     print(f"PSNR restored    : {psnr_rec:.2f} dB")
+    print(f"SSIM blurry/noisy: {ssim_blur:.2f}")
+    print(f"SSIM restored    : {ssim_rec:.2f}")
     
 
 @torch.no_grad()
@@ -211,6 +216,9 @@ def run_deblur_one_return_metrics(
 
     psnr_blur = psnr_torch(y_cpu, x_cpu)
     psnr_rec  = psnr_torch(xhat_cpu, x_cpu)
+    
+    ssim_blur = ssim_torch(y_cpu, x_cpu)
+    ssim_rec  = ssim_torch(xhat_cpu, x_cpu)
 
     # ----- optional save -----
     if save_outputs:
@@ -230,6 +238,9 @@ def run_deblur_one_return_metrics(
         "psnr_blurry_db": float(psnr_blur),
         "psnr_restored_db": float(psnr_rec),
         "gain_db": float(psnr_rec - psnr_blur),
+        "ssim_blurry": float(ssim_blur),
+        "ssim_restored": float(ssim_rec),
+        "ssim_gain": float(ssim_rec - ssim_blur),
     }
 
 
@@ -274,13 +285,17 @@ def benchmark_dpir_deblur_to_csv(
             out_dir=out_dir,
         )
         rows.append(row)
-        print(f"[{i+1}/{n_images}] {row['filename']} | PSNR blurry {row['psnr_blurry_db']:.2f} -> restored {row['psnr_restored_db']:.2f} dB")
+        print(f"[{i+1}/{n_images}] {row['filename']} | PSNR blurry {row['psnr_blurry_db']:.2f} -> restored {row['psnr_restored_db']:.2f} dB | SSIM blurry {row['ssim_blurry']:.2f} -> restored {row['ssim_restored']:.2f}")
 
     df = pd.DataFrame(rows)
 
-    mean_blur = df["psnr_blurry_db"].mean()
-    mean_rest = df["psnr_restored_db"].mean()
-    mean_gain = df["gain_db"].mean()
+    mean_blur_psnr = df["psnr_blurry_db"].mean()
+    mean_rest_psnr = df["psnr_restored_db"].mean()
+    mean_gain_psnr = df["gain_db"].mean()
+    
+    mean_blur_ssim = df["ssim_blurry"].mean()
+    mean_rest_ssim = df["ssim_restored"].mean()
+    mean_gain_ssim = df["ssim_gain"].mean()
 
     csv_path = os.path.join(
         out_dir,
@@ -289,35 +304,38 @@ def benchmark_dpir_deblur_to_csv(
     df.to_csv(csv_path, index=False)
 
     print("\n=== Moyennes (DPIR deblur) ===")
-    print(f"PSNR blurry   : {mean_blur:.2f} dB")
-    print(f"PSNR restored : {mean_rest:.2f} dB")
-    print(f"Gain          : {mean_gain:.2f} dB")
+    print(f"PSNR blurry   : {mean_blur_psnr:.2f} dB")
+    print(f"PSNR restored : {mean_rest_psnr:.2f} dB")
+    print(f"Gain          : {mean_gain_psnr:.2f} dB")
+    print(f"SSIM blurry   : {mean_blur_ssim:.2f}")
+    print(f"SSIM restored : {mean_rest_ssim:.2f}")
+    print(f"Gain SSIM       : {mean_gain_ssim:.2f}")
     print("CSV saved:", csv_path)
 
     return df, csv_path
 
 if __name__ == "__main__":
-    test_deblurring_dpir_with_levin09(
-         clean_path="./BSDS300/images/test/37073.jpg",
-         ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-         levin09_path="kernels/Levin09.npy",
-         kernel_index=0,
-         sigma_img=2.55,
-         n_iter=8,
-         lam=0.23,
-         out_dir="results_DRUNET/results_DRUNET_deblur",
- )
+  #  test_deblurring_dpir_with_levin09(
+   #      clean_path="./BSDS300/images/test/37073.jpg",
+   #      ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
+   #      levin09_path="kernels/Levin09.npy",
+   #      kernel_index=0,
+    #     sigma_img=2.55,
+    #     n_iter=8,
+   #      lam=0.23,
+   #      out_dir="results_DRUNET/results_DRUNET_deblur",
+ #)
 
- #   benchmark_dpir_deblur_to_csv(
-  #      test_dir="./BSDS300/images/test",
-  #      ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-  #      levin09_path="kernels/Levin09.npy",
-  #      kernel_index=0,
-  #      sigma_img=2.55,
-  #      n_iter=8,
-  #      lam=0.23,
-  #      n_images=10,
-  #      seed=0,
-  #      out_dir="results_DRUNET/results_DRUNET_deblur_benchmark",
-  #      save_examples=False,
-  #  )
+    benchmark_dpir_deblur_to_csv(
+        test_dir="./BSDS300/images/test",
+        ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
+        levin09_path="kernels/Levin09.npy",
+        kernel_index=0,
+        sigma_img=2.55,
+        n_iter=8,
+        lam=0.23,
+        n_images=10,
+        seed=0,
+        out_dir="results_DRUNET/results_DRUNET_deblur_benchmark",
+        save_examples=False,
+    )

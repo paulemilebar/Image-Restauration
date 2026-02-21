@@ -1,9 +1,11 @@
 from IRCNN_sigmamap import IRCNNSigmaMap
+from IRCNN_sigmamap_denoise import ssim_torch
 import os, random, math
 from PIL import Image
 import torch
 import torch.nn as nn
 import torchvision.transforms.functional as TF
+
 
 def psf_to_otf(psf: torch.Tensor, H: int, W: int):
     """
@@ -161,6 +163,11 @@ def test_deblur_mode_A(
     psnr_blur = psnr_torch01(blurred, clean)
     psnr_y = psnr_torch01(y, clean)
     psnr_hat = psnr_torch01(xhat, clean)
+    
+    # metrics
+    ssim_blur = ssim_torch(blurred, clean)
+    ssim_y = ssim_torch(y, clean)
+    ssim_hat = ssim_torch(xhat, clean)
 
     # save
     TF.to_pil_image(clean.squeeze(0).cpu()).save(os.path.join(out_dir, "clean.png"))
@@ -172,6 +179,9 @@ def test_deblur_mode_A(
     print(f"PSNR blurred     : {psnr_blur:.2f} dB")
     print(f"PSNR blurred+noise: {psnr_y:.2f} dB")
     print(f"PSNR deblurred   : {psnr_hat:.2f} dB")
+    print(f"SSIM blurred     : {ssim_blur:.2f} dB")
+    print(f"SSIM blurred+noise: {ssim_y:.2f} dB")
+    print(f"SSIM deblurred   : {ssim_hat:.2f} dB")
 
 @torch.no_grad()
 def deblur_real(
@@ -199,9 +209,7 @@ def deblur_real(
         y01=y,
         psf=psf,
         sigma_n_pixels=sigma_n_pixels,
-        sigmas_pixels=[9.00, 8.5, 8, 7.5, 7, 6.5,
-  6, 5.5,  5,   4.5,  4,  3.5,
-  3,  2.5,  2],
+        sigmas_pixels=[9.00, 8.5, 8, 7.5, 7, 6.5, 6, 5.5,  5,   4.5,  4,  3.5, 3,  2.5,  2],
         device=device
     )
 
@@ -222,11 +230,10 @@ print("Image choisie:", clean_path)
 
 ckpt_path = r"weights_ircnn_sigmap/ircnn_sigmap_final.pth" 
 
-# 3) Paramètres de flou + bruit pour le test
-out_dir = "IRCNN_sigmamap/results_IRCNN_deblur"
+out_dir = "results_IRCNN_sigmamap/results_IRCNN_deblur"
 ksize = 19
-blur_sigma = 1.6       # flou gaussien 
-sigma_n_pixels = 2   # bruit rajouté
+blur_sigma = 1.6 
+sigma_n_pixels = 2
 
 test_deblur_mode_A(
     clean_path=clean_path,
