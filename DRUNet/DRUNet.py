@@ -1,11 +1,9 @@
 import os, random
 from typing import Tuple
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset
-
 from PIL import Image
 import torchvision.transforms.functional as TF
 
@@ -77,7 +75,7 @@ class RandomPatchSigmaMapDataset(Dataset):
         inp = torch.cat([noisy, sigma_map], dim=0)  # (4,H,W)
         return inp, clean
 
-# DRUNet (paper-like): bias-free, 4 scales, SConv 2x2, TConv 2x2, nb=4
+# DRUNet: bias-free, 4 scales, SConv 2x2, TConv 2x2, nb=4
 class ResBlockOneReLU(nn.Module):
     """
     Residual block: Conv -> ReLU -> Conv, bias-free, un seul ReLU.

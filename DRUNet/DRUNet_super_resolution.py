@@ -1,4 +1,5 @@
-import os, math
+import os
+from DRUNet_denoise import psnr_torch, list_images
 import numpy as np
 from PIL import Image
 import random
@@ -8,10 +9,7 @@ import torchvision.transforms.functional as TF
 import matplotlib.pyplot as plt
 import pandas as pd
 from DRUNet import DRUNetSigmaMap
-
-def psnr_torch(x, y, eps=1e-12):
-    mse = torch.mean((x - y) ** 2).item()
-    return 10.0 * math.log10(1.0 / (mse + eps))
+from scipy.io import loadmat
 
 def modcrop_tensor(x: torch.Tensor, sf: int) -> torch.Tensor:
     _, _, H, W = x.shape
@@ -22,24 +20,11 @@ def modcrop_tensor(x: torch.Tensor, sf: int) -> torch.Tensor:
 def save_img01(t: torch.Tensor, path: str):
     TF.to_pil_image(t.squeeze(0).clamp(0, 1).cpu()).save(path)
 
-
-# Load kernels_12.mat (paper-like kernels)
-def loadmat_any(path: str):
-    try:
-        import hdf5storage
-        return hdf5storage.loadmat(path)
-    except Exception:
-        from scipy.io import loadmat
-        return loadmat(path)
-
-def load_kernel12(kernels_mat_path: str, k_index: int) -> np.ndarray:
-    md = loadmat_any(kernels_mat_path)
-    kernels = md["kernels"]              # expected (1,8) object
-    k = kernels[0, k_index]
-    k = np.asarray(k, dtype=np.float64)
-    k = k / (k.sum() + 1e-12)
+def load_kernel12(path="kernels/kernels_12.mat", k_index=0) -> np.ndarray:
+    k = loadmat(path)["kernels"][0, k_index]
+    k = np.asarray(k, dtype=np.float32)
+    k /= k.sum()
     return k
-
 
 # DPIR SISR closed-form (Eq. 14)
 def splits(a: torch.Tensor, sf: int) -> torch.Tensor:
@@ -70,7 +55,7 @@ def downsample_decimate(x: torch.Tensor, sf: int) -> torch.Tensor:
 
 def pre_calculate(img_L: torch.Tensor, k: torch.Tensor, sf: int):
     h, w = img_L.shape[-2:]
-    FB  = p2o(k, (h*sf, w*sf)) # FB = FFT(k) : opérateur de floutage B dans Fourrier
+    FB  = p2o(k, (h*sf, w*sf)) # FB = FFT(k) : blurring operatour B in Fourrier domain
     FBC = torch.conj(FB)
     F2B = torch.pow(torch.abs(FB), 2)
     STy = upsample_zeros(img_L, sf=sf)
@@ -248,15 +233,6 @@ def run_one(
     plt.show()
 
 
-def list_images(folder, exts=(".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")):
-    paths = []
-    for root, _, files in os.walk(folder):
-        for fn in files:
-            if fn.lower().endswith(exts):
-                paths.append(os.path.join(root, fn))
-    return sorted(paths)
-
-
 @torch.no_grad()
 def run_one_metrics_sisr(
     clean_path: str,
@@ -425,26 +401,26 @@ def benchmark_sisr_10_random_to_csv(
 
 if __name__ == "__main__":
     # test for 1 image
-#    run_one(
-#        clean_path="./BSDS300/images/test/37073.jpg",
-#        ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-#        out_dir="results_DRUNET/results_DRUNET_superresolution",
-#        scale=2,
-#        sigma_img=0,
-#        iter_num=24,
-#    )
-
-    # benchmark for 10 images
-    benchmark_sisr_10_random_to_csv(
-        test_dir="./BSDS300/images/test",
+    run_one(
+        clean_path="./BSDS300/images/test/37073.jpg",
         ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-        out_dir="results_DRUNET/results_DRUNET_superresolution_benchmark",
-        n_images=10,
-        seed=0,
+        out_dir="results_DRUNET/results_DRUNET_superresolution",
         scale=2,
         sigma_img=0,
         iter_num=24,
-        kernels_mat_path="kernels/kernels_12.mat",
-        k_index=2,
-        save_examples=False,
     )
+
+    # benchmark for 10 images
+ #   benchmark_sisr_10_random_to_csv(
+ #       test_dir="./BSDS300/images/test",
+  #      ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
+  #      out_dir="results_DRUNET/results_DRUNET_superresolution_benchmark",
+  #      n_images=10,
+   ##     seed=0,
+    #    scale=2,
+     #   sigma_img=0,
+      #  iter_num=24,
+       # kernels_mat_path="kernels/kernels_12.mat",
+       # k_index=2,
+       # save_examples=False,
+    #)

@@ -1,13 +1,12 @@
 import os, math, random
 import numpy as np
 from PIL import Image
-
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
-
-from DRUNet.DRUNet import DRUNetSigmaMap
-from IRCNN.IRCNN import IRCNNSigmaMap
+from DRUNet import DRUNetSigmaMap
+from DRUNet_denoise import psnr_torch
+from DRUNet_super_resolution import psnr_torch, save_img01
 import matplotlib.pyplot as plt
 import time
 from glob import glob
@@ -15,7 +14,6 @@ import pandas as pd
 
 
 # Utils
-
 def l2norm_flat(x: torch.Tensor) -> torch.Tensor:
     return torch.norm(x.reshape(-1), p=2)
 
@@ -62,14 +60,6 @@ def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "drunet"):
     plt.savefig(os.path.join(out_dir, f"{prefix}_cumsum_rel_step.png"), dpi=200)
     plt.close()
 
-def psnr_torch(x, y, eps=1e-12):
-    mse = torch.mean((x - y) ** 2).item()
-    return 10.0 * math.log10(1.0 / (mse + eps))
-
-def save_img01(t: torch.Tensor, path: str):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    TF.to_pil_image(t.squeeze(0).clamp(0, 1).cpu()).save(path)
-
 def randn_like_compat(x: torch.Tensor, seed: int):
     try:
         g = torch.Generator(device=x.device).manual_seed(seed)
@@ -98,7 +88,7 @@ def make_random_rect_mask(H: int, W: int, missing_ratio: float = 0.2, seed: int 
     return torch.from_numpy(mask).unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
 
 
-# Shepard init (RGB) : Interpolation des points voisins et fait une moyenne de la fenêtre utilisée. Méthode purement analytique sans Deep Learning
+# Shepard init (RGB) : Interpolation of neighboors points and do an average in the window used. This is an analytic method without Deep Learning
 def shepard_initialize_rgb(y01: torch.Tensor, M01: torch.Tensor, window: int = 9, p: float = 2.0) -> torch.Tensor:
     assert window % 2 == 1
     y = y01.squeeze(0).permute(1, 2, 0).detach().cpu().numpy()   # (H,W,3)
@@ -137,7 +127,6 @@ def shepard_initialize_rgb(y01: torch.Tensor, M01: torch.Tensor, window: int = 9
     z0 = torch.from_numpy(out).permute(2, 0, 1).unsqueeze(0)
     return z0.clamp(0, 1)
 
-
 # Denoisers (sigma-map)
 @torch.no_grad()
 def drunet_infer(model, inp, modulo: int = 8):
@@ -152,19 +141,11 @@ def drunet_infer(model, inp, modulo: int = 8):
 
 @torch.no_grad()
 def denoise_sigma_map(model_name: str, model, x3: torch.Tensor, sigma: float):
-    # sigma: normalisé [0,1]
     B, C, H, W = x3.shape
     sigma_map = torch.full((B, 1, H, W), float(sigma), device=x3.device, dtype=x3.dtype)
     inp4 = torch.cat([x3, sigma_map], dim=1)
-    if model_name == "drunet":
-        return drunet_infer(model, inp4, modulo=8).clamp(0, 1)
-    elif model_name == "ircnn":
-        return model(inp4).clamp(0, 1)
-    else:
-        raise ValueError("model_name must be 'drunet' or 'ircnn'")
+    return drunet_infer(model, inp4, modulo=8).clamp(0, 1)
 
-
-# Schedule DPIR utils_inpaint (ton snippet)
 def get_rho_sigma_dpir(sigma_obs=2.55/255, iter_num=15, modelSigma2=2.55):
     modelSigma1 = 49.0
     modelSigmaS = np.logspace(np.log10(modelSigma1), np.log10(modelSigma2), iter_num).astype(np.float32)
@@ -231,7 +212,7 @@ def dpir_hqs_inpaint(
         sigma_k = float(sigmas[k])  # déjà normalisé [0,1]
         z = denoise_sigma_map(model_name, model, xk, sigma=sigma_k)
 
-        # hard enforce known pixels
+        # enforce known pixels
         z = (M3 * y + (1.0 - M3) * z).clamp(0, 1)
 
         # ||x_{k+1}-x_k|| / ||x0|| + somme cumulée
@@ -255,7 +236,7 @@ def dpir_hqs_inpaint(
     return (z, metrics) if track_convergence else z
 
 
-def run_compare(clean_path, out_dir, drunet_ckpt, ircnn_ckpt,
+def run_compare(clean_path, out_dir, drunet_ckpt,
                 missing_ratio=0.15, seed=0,
                 iter_num=15, sigma_obs_pix=5.0, modelSigma2_pix=2.55,
                 shepard_window=21, shepard_p=2.0):
@@ -288,13 +269,7 @@ def run_compare(clean_path, out_dir, drunet_ckpt, ircnn_ckpt,
     sd = st["model"] if isinstance(st, dict) and "model" in st else st
     drunet.load_state_dict(sd, strict=True)
 
-    # Load IRCNN
-    ircnn = IRCNNSigmaMap(features=64).to(device).eval()
-    st = torch.load(ircnn_ckpt, map_location=device)
-    sd = st["model"] if isinstance(st, dict) and "model" in st else st
-    ircnn.load_state_dict(sd, strict=True)
-
-    # --- DRUNet + tracking
+    # DRUNet + tracking
     rec_d, metrics_d = dpir_hqs_inpaint(
         y=y, M=M, model_name="drunet", model=drunet,
         iter_num=iter_num, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
@@ -302,18 +277,12 @@ def run_compare(clean_path, out_dir, drunet_ckpt, ircnn_ckpt,
         track_convergence=True, gt=gt
     )
 
-    rec_i = dpir_hqs_inpaint(
-        y=y, M=M, model_name="ircnn", model=ircnn,
-        iter_num=iter_num, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
-        shepard_window=shepard_window, shepard_p=shepard_p, seed=seed
-    )
 
     save_img01(rec_d, os.path.join(out_dir, "restored_dpir_hqs_drunet.png"))
-    save_img01(rec_i, os.path.join(out_dir, "restored_dpir_hqs_ircnn.png"))
 
     save_convergence_plots(metrics_d, out_dir=out_dir, prefix="drunet")
 
-    # Metrics finaux
+    # Final metrics
     miss = (1.0 - M3)
 
     def psnr_on_missing(a, b, missmask, eps=1e-12):
@@ -326,20 +295,20 @@ def run_compare(clean_path, out_dir, drunet_ckpt, ircnn_ckpt,
     print("  input        :", f"{psnr_torch(y, gt):.2f} dB")
     print("  shepard-only :", f"{psnr_torch(rec_sh, gt):.2f} dB")
     print("  DPIR+DRUNet  :", f"{psnr_torch(rec_d, gt):.2f} dB")
-    print("  DPIR+IRCNN   :", f"{psnr_torch(rec_i, gt):.2f} dB")
     print("PSNR missing:")
     print("  input        :", f"{psnr_on_missing(y,      gt, miss):.2f} dB")
     print("  shepard-only :", f"{psnr_on_missing(rec_sh, gt, miss):.2f} dB")
     print("  DPIR+DRUNet  :", f"{psnr_on_missing(rec_d,  gt, miss):.2f} dB")
-    print("  DPIR+IRCNN   :", f"{psnr_on_missing(rec_i,  gt, miss):.2f} dB")
     print("Convergence plots saved:")
     print(" ", os.path.join(out_dir, "drunet_psnr_xk.png"))
     print(" ", os.path.join(out_dir, "drunet_rel_step_log.png"))
     print(" ", os.path.join(out_dir, "drunet_cumsum_rel_step.png"))
     
+    
+    
 ############## CODE FOR BENCHMARK ####################
 
-IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff")
+IMG_EXT = (".png", ".jpg", ".jpeg")
 
 def list_images_in_dir(root: str):
     paths = []
@@ -354,27 +323,19 @@ def pick_n_images(paths, n=10, seed=0):
         return paths
     return rng.sample(paths, n)
 
-def load_models_once(device, drunet_ckpt, ircnn_ckpt):
+def load_models_once(device, drunet_ckpt):
     # DRUNet
     drunet = DRUNetSigmaMap(in_nc=4, out_nc=3, nc=(64,128,256,512), nb=4).to(device).eval()
     st = torch.load(drunet_ckpt, map_location=device)
     sd = st["model"] if isinstance(st, dict) and "model" in st else st
     drunet.load_state_dict(sd, strict=True)
-
-    # IRCNN
-    ircnn = IRCNNSigmaMap(features=64).to(device).eval()
-    st = torch.load(ircnn_ckpt, map_location=device)
-    sd = st["model"] if isinstance(st, dict) and "model" in st else st
-    ircnn.load_state_dict(sd, strict=True)
-
-    return drunet, ircnn
+    return drunet
 
 @torch.no_grad()
 def run_compare_return_metrics(
     clean_path,
     out_dir,
     drunet,
-    ircnn,
     missing_ratio=0.15,
     seed=0,
     iter_num=15,
@@ -395,7 +356,7 @@ def run_compare_return_metrics(
     M3 = M.repeat(1, 3, 1, 1)
     y = (gt * M3).clamp(0, 1)
 
-    # bruit observation (sur pixels connus)
+    # noise observation (on known pixels)
     sigma_obs = float(sigma_obs_pix) / 255.0
     if sigma_obs > 0:
         y = (M3 * (y + randn_like_compat(y, seed=seed+123) * sigma_obs)).clamp(0, 1)
@@ -422,12 +383,6 @@ def run_compare_return_metrics(
     t_d = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    rec_i = dpir_hqs_inpaint(
-        y=y, M=M, model_name="ircnn", model=ircnn,
-        iter_num=iter_num, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
-        shepard_window=int(shepard_window), shepard_p=shepard_p, seed=seed
-    )
-    t_i = time.perf_counter() - t0
 
     miss = (1.0 - M3)
 
@@ -446,13 +401,10 @@ def run_compare_return_metrics(
         "psnr_input": psnr_torch(y, gt),
         "psnr_shepard": psnr_torch(rec_sh, gt),
         "psnr_dpir_drunet": psnr_torch(rec_d, gt),
-        "psnr_dpir_ircnn": psnr_torch(rec_i, gt),
         "psnr_miss_input": psnr_on_missing(y, gt, miss),
         "psnr_miss_shepard": psnr_on_missing(rec_sh, gt, miss),
         "psnr_miss_dpir_drunet": psnr_on_missing(rec_d, gt, miss),
-        "psnr_miss_dpir_ircnn": psnr_on_missing(rec_i, gt, miss),
         "time_drunet_s": t_d,
-        "time_ircnn_s": t_i,
     }
 
     if save_outputs:
@@ -461,7 +413,6 @@ def run_compare_return_metrics(
         save_img01(y,  os.path.join(out_dir, "masked_noisy.png"))
         save_img01(rec_sh, os.path.join(out_dir, "restored_shepard_only.png"))
         save_img01(rec_d,  os.path.join(out_dir, "restored_dpir_hqs_drunet.png"))
-        save_img01(rec_i,  os.path.join(out_dir, "restored_dpir_hqs_ircnn.png"))
 
         if save_convergence and (metrics_d is not None):
             save_convergence_plots(metrics_d, out_dir=out_dir, prefix="drunet")
@@ -473,17 +424,16 @@ def run_pool_10_images(
     clean_dir,
     out_root,
     drunet_ckpt,
-    ircnn_ckpt,
     n_images=10,
     seed=0,
-    missing_ratio=0.42,
+    missing_ratio=0.45,
     iter_num=20,
     sigma_obs_pix=5.0,
     modelSigma2_pix=2.55,
     shepard_window=21,
     shepard_p=2.0,
-    save_outputs_per_image=False,     # si False -> pas d’images, juste le tableau
-    save_convergence=False,           # convergence plots par image (DRUNet)
+    save_outputs_per_image=False,
+    save_convergence=False,
     csv_name="results_pool.csv"
 ):
     os.makedirs(out_root, exist_ok=True)
@@ -491,11 +441,9 @@ def run_pool_10_images(
     print("Device:", device)
 
     paths = list_images_in_dir(clean_dir)
-    if not paths:
-        raise ValueError(f"Aucune image trouvée dans {clean_dir}")
     chosen = pick_n_images(paths, n=n_images, seed=seed)
 
-    drunet, ircnn = load_models_once(device, drunet_ckpt, ircnn_ckpt)
+    drunet = load_models_once(device, drunet_ckpt)
 
     rows = []
     for p in chosen:
@@ -506,7 +454,6 @@ def run_pool_10_images(
             clean_path=p,
             out_dir=out_dir,
             drunet=drunet,
-            ircnn=ircnn,
             missing_ratio=missing_ratio,
             seed=seed,
             iter_num=iter_num,
@@ -518,7 +465,6 @@ def run_pool_10_images(
             save_convergence=save_convergence
         )
         rows.append(r)
-        print(f"[OK] {r['image']} | PSNR DRUNet={r['psnr_dpir_drunet']:.2f}  IRCNN={r['psnr_dpir_ircnn']:.2f}")
 
         df = pd.DataFrame(rows)
 
@@ -545,13 +491,11 @@ def run_pool_10_images(
         return rows
 
 
-if __name__ == "__main__":
-    run_compare(
+run_compare(
         clean_path=r"./BSDS300/images/test/37073.jpg",
-        out_dir="results_DRUNET/results_IRCNN_DRUNET_SHEPARD_inpaint",
+        out_dir="results_DRUNET/results_DRUNET_SHEPARD_inpaint",
         drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
-        ircnn_ckpt=r"./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
-        missing_ratio=0.42,
+        missing_ratio=0.45,
         seed=0,
         iter_num=20,
         sigma_obs_pix=5.0,
@@ -563,9 +507,8 @@ if __name__ == "__main__":
     
  #   df = run_pool_10_images(
  #       clean_dir=r"./BSDS300/images/test",
- #       out_root="results_DRUNET/results_DRUNET_IRCNN_inpaint_benchmark",
+ #       out_root="results_DRUNET/results_DRUNET_inpaint_benchmark",
  #       drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
- #       ircnn_ckpt=r"./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
  #       n_images=10,
  #       seed=0,
  #       missing_ratio=0.42,
@@ -574,8 +517,7 @@ if __name__ == "__main__":
  #       modelSigma2_pix=2.55,
  #       shepard_window=21,
  #       shepard_p=2.0,
- #       save_outputs_per_image=False,  # mets True si tu veux un sous-dossier par image avec les PNG
- #       save_convergence=False,        # mets True si tu veux les 3 plots convergence par image
+ #       save_outputs_per_image=False,
+ #       save_convergence=False,
  #       csv_name="pool10_metrics.csv"
  #   )
- #   print(df if isinstance(df, list) else df.tail(5))

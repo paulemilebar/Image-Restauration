@@ -1,38 +1,22 @@
-# analyze_drunet_latent_37073_diverse.py
 import os, math, random
-from glob import glob
-
 import numpy as np
 from PIL import Image
-
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
-
 import matplotlib.pyplot as plt
-
 from sklearn.decomposition import PCA
+from DRUNet_denoise import list_images, add_awgn
+from DRUNet_super_resolution import save_img01
 
 
-IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff")
-
-def list_images(root):
-    paths = []
-    for r, _, files in os.walk(root):
-        for f in files:
-            if f.lower().endswith(IMG_EXT):
-                paths.append(os.path.join(r, f))
-    return sorted(paths)
+IMG_EXT = (".png", ".jpg", ".jpeg")
 
 def ensure_dir(d):
     os.makedirs(d, exist_ok=True)
 
 def to_tensor01(pil):
     return TF.to_tensor(pil)  # (3,H,W) in [0,1]
-
-def save_img01(t01_chw, path):
-    t01_chw = t01_chw.detach().cpu().clamp(0, 1)
-    TF.to_pil_image(t01_chw).save(path)
 
 def save_gray01(gray_hw, path):
     arr = (gray_hw.detach().cpu().clamp(0, 1).numpy() * 255.0).astype(np.uint8)
@@ -47,30 +31,6 @@ def seed_all(seed=0):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-
-
-# Noise + input builder
-def add_awgn(clean_01, sigma_pixels, generator=None):
-    """
-    clean_01: (1,3,H,W) in [0,1]
-    sigma_pixels: float
-    generator: torch.Generator optionnel (CPU uniquement)
-    """
-    sigma = float(sigma_pixels) / 255.0
-
-    if clean_01.device.type == "cuda":
-        noise = torch.randn_like(clean_01) * sigma
-    else:
-        if generator is None:
-            noise = torch.randn(clean_01.shape, device=clean_01.device, dtype=clean_01.dtype) * sigma
-        else:
-            noise = torch.randn(
-                clean_01.shape,
-                device=clean_01.device,
-                dtype=clean_01.dtype,
-                generator=generator
-            ) * sigma
-    return clean_01 + noise
 
 def build_inp(noisy, sigma_pixels):
     """
@@ -236,7 +196,6 @@ def plot_weight_stats(model, out_path_png):
     plt.savefig(out_path_png, dpi=200)
     plt.close(fig)
 
-
 # Latent visualizations
 def feature_energy_map(feat_bchw):
     """
@@ -266,20 +225,12 @@ def topk_channel_grid_diverse(
     corr_thr=0.90,
     candidates_mul=8,
 ):
-    """
-    Sélectionne des canaux "top variance" mais en imposant de la diversité :
-    - on trie les canaux par variance décroissante
-    - on prend greedy ceux dont |corr| <= corr_thr avec tous les déjà pris
-    (corr calculée sur la carte aplatie)
-
-    candidates_mul: on regarde les (k*candidates_mul) meilleurs par variance pour trouver k diversifiés.
-    """
     f = feat_bchw[0].detach().cpu()  # (C,H,W)
     C, H, W = f.shape
 
     flat = f.view(C, -1)  # (C, HW)
     var = flat.var(dim=1)  # (C,)
-    # indices triés par variance décroissante
+
     sorted_idx = torch.argsort(var, descending=True).tolist()
 
     max_cand = min(len(sorted_idx), k * candidates_mul)

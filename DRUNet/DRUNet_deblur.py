@@ -1,5 +1,5 @@
 import os, random
-from DRUNet_denoise import psnr_torch
+from DRUNet_denoise import psnr_torch, list_images
 import torch
 import pandas as pd
 from PIL import Image
@@ -9,21 +9,13 @@ import numpy as np
 
 def load_levin09_kernel(npy_path: str = "kernels/Levin09.npy", kernel_index: int = 0) -> np.ndarray:
     arr = np.load(npy_path, allow_pickle=True)
-
-    K = arr.shape[1]
-
     k = np.asarray(arr[0, kernel_index], dtype=np.float32)
-
     s = float(k.sum())
     k /= s
-    
     return k
+
 # FFT circular convolution 
 def psf_to_otf(psf: torch.Tensor, out_hw: tuple[int, int]) -> torch.Tensor:
-    """
-    psf: (kh,kw) real
-    returns otf: (H,W) complex
-    """
     H, W = out_hw
     kh, kw = psf.shape
     pad = torch.zeros((H, W), device=psf.device, dtype=psf.dtype)
@@ -85,7 +77,7 @@ def dpir_hqs_deblur(
     return z
 
 
-# Main test function: blur + noise, then DPIR deblur
+# Main test function for : blur + noise, then DPIR deblur
 @torch.no_grad()
 def test_deblurring_dpir_with_levin09(
     clean_path: str,
@@ -98,7 +90,6 @@ def test_deblurring_dpir_with_levin09(
     out_dir: str = "test_outputs_dpir_deblur",
     seed: int = 0,
 ):
-    assert os.path.isfile(levin09_path), f"File not found: {levin09_path}"
     os.makedirs(out_dir, exist_ok=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -123,13 +114,12 @@ def test_deblurring_dpir_with_levin09(
     blurry = circ_conv_fft(x, otf)
 
     sigma_n = sigma_img / 255.0
-    try:
-        g = torch.Generator(device=device).manual_seed(seed)
-        noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype, generator=g) * sigma_n
-    except TypeError:
+    g = torch.Generator(device=device).manual_seed(seed)
+    noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype, generator=g) * sigma_n
+    #except TypeError:
         # fallback si generator n'est pas supporté
-        torch.manual_seed(seed)
-        noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype) * sigma_n
+     #   torch.manual_seed(seed)
+      #  noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype) * sigma_n
 
     y = (blurry + noise).clamp(0.0, 1.0)
 
@@ -174,7 +164,6 @@ def run_deblur_one_return_metrics(
     save_outputs: bool = False,
     out_dir: str = "results_DRUNET_deblur_batch",
 ):
-    assert os.path.isfile(levin09_path), f"File not found: {levin09_path}"
     if save_outputs:
         os.makedirs(out_dir, exist_ok=True)
 
@@ -244,15 +233,6 @@ def run_deblur_one_return_metrics(
     }
 
 
-def list_images(folder, exts=(".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")):
-    paths = []
-    for root, _, files in os.walk(folder):
-        for fn in files:
-            if fn.lower().endswith(exts):
-                paths.append(os.path.join(root, fn))
-    return sorted(paths)
-
-
 @torch.no_grad()
 def benchmark_dpir_deblur_to_csv(
     test_dir: str,
@@ -267,17 +247,13 @@ def benchmark_dpir_deblur_to_csv(
     out_dir: str = "results_DRUNET_deblur_benchmark",
     save_examples: bool = False,
 ):
-    """
-    Sélectionne n_images au hasard dans test_dir, lance blur+noise+DPIR deblur,
-    et sauvegarde un CSV + affiche les moyennes.
-    """
     os.makedirs(out_dir, exist_ok=True)
 
     all_paths = list_images(test_dir)
     if len(all_paths) == 0:
-        raise RuntimeError(f"Aucune image trouvée dans {test_dir}")
+        raise RuntimeError(f"No images found in {test_dir}")
     if len(all_paths) < n_images:
-        raise RuntimeError(f"Pas assez d'images: {len(all_paths)} < {n_images}")
+        raise RuntimeError(f"Not enough images: {len(all_paths)} < {n_images}")
 
     rng = random.Random(seed)
     chosen = rng.sample(all_paths, n_images)

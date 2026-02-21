@@ -1,6 +1,5 @@
 import os, math, random
 from typing import List, Tuple, Optional, Dict
-
 import torch
 import torch.nn.functional as F
 import pandas as pd
@@ -15,7 +14,7 @@ def psnr_torch(x01: torch.Tensor, y01: torch.Tensor, eps: float = 1e-8) -> float
     return 10.0 * math.log10(1.0 / (mse + eps))
 
 
-def list_images(folder: str, exts=(".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")) -> List[str]:
+def list_images(folder: str, exts=(".png", ".jpg", ".jpeg")) -> List[str]:
     paths = []
     for root, _, files in os.walk(folder):
         for fn in files:
@@ -26,10 +25,6 @@ def list_images(folder: str, exts=(".png", ".jpg", ".jpeg", ".bmp", ".tif", ".ti
 
 @torch.no_grad()
 def drunet_infer(model: torch.nn.Module, inp: torch.Tensor, modulo: int = 8) -> torch.Tensor:
-    """
-    inp: (B,4,H,W)
-    Pad reflect to make H,W multiples of 'modulo', then crop back.
-    """
     b, c, h, w = inp.shape
     pad_h = (modulo - h % modulo) % modulo
     pad_w = (modulo - w % modulo) % modulo
@@ -41,37 +36,13 @@ def drunet_infer(model: torch.nn.Module, inp: torch.Tensor, modulo: int = 8) -> 
 
 
 def load_drunet(ckpt_path: str, device: Optional[torch.device] = None) -> Tuple[torch.nn.Module, torch.device]:
-    """
-    Loads DRUNetSigmaMap and returns (model, device).
-    Accepts checkpoints saved as {"model": state_dict, ...} or raw state_dict.
-    """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     model = DRUNetSigmaMap(in_nc=4, out_nc=3, nc=(64, 128, 256, 512), nb=4).to(device).eval()
-
     state = torch.load(ckpt_path, map_location=device)
     sd = state["model"] if isinstance(state, dict) and "model" in state else state
     model.load_state_dict(sd, strict=True)
     return model, device
-
-
-@torch.no_grad()
-def denoise_image_pil(model: torch.nn.Module, img_pil: Image.Image, sigma: float, device: torch.device,
-                      modulo: int = 8) -> Image.Image:
-    """
-    Denoise a PIL image directly (useful for quick qualitative results).
-    sigma: noise level in 'pixel space' (0..50)
-    """
-    y = TF.to_tensor(img_pil)  # (3,H,W) in [0,1]
-    H, W = y.shape[1], y.shape[2]
-    sigma01 = sigma / 255.0
-    sigma_map = torch.full((1, 1, H, W), sigma01, dtype=y.dtype)
-
-    inp = torch.cat([y.unsqueeze(0), sigma_map], dim=1).to(device)  # (1,4,H,W)
-    out = drunet_infer(model, inp, modulo=modulo).squeeze(0).clamp(0.0, 1.0).cpu()
-    return TF.to_pil_image(out)
-
 
 @torch.no_grad()
 def denoise_noisy_tensor(model: torch.nn.Module, noisy01: torch.Tensor, sigma: float, device: torch.device,
@@ -93,7 +64,7 @@ def denoise_noisy_tensor(model: torch.nn.Module, noisy01: torch.Tensor, sigma: f
 def add_awgn(clean01: torch.Tensor, sigma: float, seed: int = 0, device: Optional[torch.device] = None) -> torch.Tensor:
     """
     clean01: (1,3,H,W) in [0,1]
-    returns noisy = clean + N(0, (sigma/255)^2) (NO CLAMP, like paper)
+    returns noisy = clean + N(0, (sigma/255)^2)
     """
     if device is None:
         device = clean01.device
@@ -223,9 +194,9 @@ def benchmark_drunet_random(
 
 
 if __name__ == "__main__":
-    # 1) Une image (qualitatif + PSNR + sauvegardes)
-    run_single_image_demo(clean_path="./BSDS300/images/test/37073.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_single", sigma=50.0, seed=0)
+    # 1) One image (qualitative + PSNR + saves)
+    run_single_image_demo(clean_path="./BSDS300/images/test/37073.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_single", sigma=70.0, seed=0)
 
-    # 2) Benchmark N images (tableau + CSV)
+    # 2) Benchmark N images (table + CSV)
   #  benchmark_drunet_random(test_dir="./BSDS300/images/test", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_benchmark", sigma=20.0, n_images=20, seed=0, save_examples=False)
 
