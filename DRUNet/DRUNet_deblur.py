@@ -1,97 +1,23 @@
 import os, random
 from DRUNet_denoise import psnr_torch
-
 import torch
 import pandas as pd
 from PIL import Image
 import torchvision.transforms.functional as TF
 from DRUNet import DRUNetSigmaMap
-
 import numpy as np
 
-# Robust Levin09 loader (handles many .npy formats)
-def load_levin09_kernel(npy_path: str, kernel_index: int) -> np.ndarray:
-    """
-    Robust loader for Levin09.npy where kernels may be stored as:
-      - list/tuple of 2D arrays (variable sizes)
-      - object ndarray (e.g. shape (1,8), (8,), etc.) containing 2D arrays
-      - stacked float ndarray (K,H,W)
-      - dict wrappers
-    Returns a float32 2D kernel normalized to sum=1.
-    """
-    obj = np.load(npy_path, allow_pickle=True)
+def load_levin09_kernel(npy_path: str = "kernels/Levin09.npy", kernel_index: int = 0) -> np.ndarray:
+    arr = np.load(npy_path, allow_pickle=True)
 
-    # unwrap common wrappers
-    while True:
-        if isinstance(obj, np.ndarray) and obj.dtype == object and obj.size == 1:
-            obj = obj.item()
-            continue
-        if isinstance(obj, dict):
-            # try typical keys, else take first value
-            for key in ["kernels", "kernel", "psf", "k", "data"]:
-                if key in obj:
-                    obj = obj[key]
-                    break
-            else:
-                obj = next(iter(obj.values()))
-            continue
-        break
+    K = arr.shape[1]
 
-    # Case A: stacked numeric array (K,H,W)
-    if isinstance(obj, np.ndarray) and obj.dtype != object and obj.ndim == 3:
-        K = obj.shape[0]
-        if not (0 <= kernel_index < K):
-            raise IndexError(f"kernel_index={kernel_index} out of range, K={K}")
-        k = obj[kernel_index].astype(np.float32)
+    k = np.asarray(arr[0, kernel_index], dtype=np.float32)
 
-    # Case B: single numeric kernel (H,W)
-    elif isinstance(obj, np.ndarray) and obj.dtype != object and obj.ndim == 2:
-        if kernel_index != 0:
-            raise IndexError(f"Only 1 kernel in file; use kernel_index=0 (got {kernel_index}).")
-        k = obj.astype(np.float32)
-
-    # Case C: list/tuple of kernels
-    elif isinstance(obj, (list, tuple)):
-        K = len(obj)
-        if not (0 <= kernel_index < K):
-            raise IndexError(f"kernel_index={kernel_index} out of range, K={K}")
-        k = np.asarray(obj[kernel_index], dtype=np.float32)
-
-    # Case D: object ndarray container (common for Levin09: shape (1,8) or (8,))
-    elif isinstance(obj, np.ndarray) and obj.dtype == object:
-        flat = list(obj.ravel())
-        # sometimes flat contains a single list/tuple of kernels
-        if len(flat) == 1 and isinstance(flat[0], (list, tuple, np.ndarray)):
-            obj2 = flat[0]
-            if isinstance(obj2, np.ndarray) and obj2.dtype == object:
-                flat = list(obj2.ravel())
-            elif isinstance(obj2, (list, tuple)):
-                flat = list(obj2)
-            elif isinstance(obj2, np.ndarray) and obj2.dtype != object and obj2.ndim == 3:
-                K = obj2.shape[0]
-                if not (0 <= kernel_index < K):
-                    raise IndexError(f"kernel_index={kernel_index} out of range, K={K}")
-                k = obj2[kernel_index].astype(np.float32)
-                s = float(k.sum())
-                if s != 0:
-                    k /= s
-                return k
-
-        K = len(flat)
-        if not (0 <= kernel_index < K):
-            raise IndexError(f"kernel_index={kernel_index} out of range, K={K}")
-        k = np.asarray(flat[kernel_index], dtype=np.float32)
-
-    else:
-        raise ValueError(f"Unsupported Levin09.npy content type: {type(obj)}, "
-                         f"ndim={getattr(obj,'ndim',None)}, dtype={getattr(obj,'dtype',None)}")
-
-    # Normalize
     s = float(k.sum())
-    if s != 0:
-        k /= s
+    k /= s
+    
     return k
-
 # FFT circular convolution 
 def psf_to_otf(psf: torch.Tensor, out_hw: tuple[int, int]) -> torch.Tensor:
     """
@@ -102,20 +28,14 @@ def psf_to_otf(psf: torch.Tensor, out_hw: tuple[int, int]) -> torch.Tensor:
     kh, kw = psf.shape
     pad = torch.zeros((H, W), device=psf.device, dtype=psf.dtype)
     pad[:kh, :kw] = psf
-    # shift center to (0,0)
     pad = torch.roll(pad, shifts=(-(kh // 2), -(kw // 2)), dims=(0, 1))
     return torch.fft.fft2(pad)
 
 def circ_conv_fft(x: torch.Tensor, otf: torch.Tensor) -> torch.Tensor:
-    """
-    x: (B,C,H,W) real
-    otf: (H,W) complex
-    """
     X = torch.fft.fft2(x, dim=(-2, -1))
     Y = X * otf[None, None, :, :]
     return torch.fft.ifft2(Y, dim=(-2, -1)).real
 
-# DPIR-like HQS deblurring: x-step FFT closed-form, z-step DRUNet
 @torch.no_grad()
 def dpir_hqs_deblur(
     y: torch.Tensor,                 # (B,3,H,W) in [0,1]
@@ -133,7 +53,7 @@ def dpir_hqs_deblur(
     sigma_min = max(sigma_img, 0.1)
 
     # log schedule sigma_d: sigma_max -> sigma_min
-    sigmas_d = np.exp(np.linspace(np.log(sigma_max), np.log(sigma_min), n_iter)).astype(np.float32)
+    sigmas_d = np.exp(np.linspace(np.log(sigma_max), np.log(sigma_min), n_iter))
 
     Y = torch.fft.fft2(y, dim=(-2, -1))
     Hc = torch.conj(otf)
