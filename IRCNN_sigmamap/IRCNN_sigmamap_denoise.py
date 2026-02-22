@@ -9,7 +9,6 @@ from torchmetrics.functional.image.ssim import structural_similarity_index_measu
 from typing import Optional, Tuple, Dict, List
 
 def psnr_torch(x, y, eps=1e-8):
-    # x,y in [0,1], shape (1,3,H,W)
     mse = torch.mean((x - y) ** 2).item()
     return 10.0 * math.log10(1.0 / (mse + eps))
 
@@ -90,7 +89,7 @@ def run_single_image_demo(
     model, device = load_ircnn(ckpt_path)
 
     clean_pil = Image.open(clean_path).convert("RGB")
-    clean = TF.to_tensor(clean_pil).unsqueeze(0)  # (1,3,H,W)
+    clean = TF.to_tensor(clean_pil).unsqueeze(0)
 
     noisy = add_awgn(clean, sigma=sigma, seed=seed, device=device)
     den = denoise_noisy_tensor(model, noisy, sigma=sigma, device=device, modulo=modulo).cpu()
