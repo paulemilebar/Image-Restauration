@@ -1,92 +1,371 @@
-import os, math
+import os, random
+from IRCNN_denoise import psnr_torch, ssim_torch, list_images
 import torch
-import numpy as np
+import pandas as pd
 from PIL import Image
 import torchvision.transforms.functional as TF
-import torch.fft
-from IRCNN import IRCNNFixed
-import matplotlib.pyplot as plt
+from IRCNN_final import IRCNNModelManager
+import numpy as np
 
-# --- Fonctions Utilitaires ---
-
-def gaussian_psf(ksize=15, sigma=1.6, device="cpu"):
-    # On crée une grille de coordonnées centrée
-    coords = torch.arange(ksize, device=device).float() - (ksize - 1) / 2
-    g = torch.exp(-(coords**2) / (2 * sigma**2))
-    kernel = g.view(-1, 1) * g.view(1, -1)
-    kernel /= kernel.sum() # Normalisation cruciale pour garder la luminosité
-    return kernel.view(1, 1, ksize, ksize)
+def load_levin09_kernel(npy_path: str = "kernels/Levin09.npy", kernel_index: int = 0) -> np.ndarray:
+    arr = np.load(npy_path, allow_pickle=True)
+    k = np.asarray(arr[0, kernel_index], dtype=np.float32)
+    s = float(k.sum())
+    k /= s
+    return k
 
 
-def solve_fidelity_fft(y, z, psf, mu, eps=1e-8):
-    # y: (1,3,H,W), z: (1,3,H,W), psf: (1,1,k,k)
-    _, _, H, W = y.shape
+def psf_to_otf(psf: torch.Tensor, out_hw: tuple[int, int]) -> torch.Tensor:
+    """
+    psf: (kh,kw) real
+    returns otf: (H,W) complex
+    """
+    H, W = out_hw
+    kh, kw = psf.shape
+    pad = torch.zeros((H, W), device=psf.device, dtype=psf.dtype)
+    pad[:kh, :kw] = psf
+    # shift center to (0,0)
+    pad = torch.roll(pad, shifts=(-(kh // 2), -(kw // 2)), dims=(0, 1))
+    return torch.fft.fft2(pad)
+
+
+def circ_conv_fft(x: torch.Tensor, otf: torch.Tensor) -> torch.Tensor:
+    """
+    x: (B,C,H,W) real
+    otf: (H,W) complex
+    """
+    X = torch.fft.fft2(x, dim=(-2, -1))
+    Y = X * otf[None, None, :, :]
+    return torch.fft.ifft2(Y, dim=(-2, -1)).real
+
+
+@torch.no_grad()
+def dpir_hqs_deblur(
+    y: torch.Tensor,                 # (B,3,H,W) in [0,1]
+    otf: torch.Tensor,               # (H,W) complex
+    manager: torch.nn.Module,       # DRUNetSigmaMap
+    sigma_img: float,                # noise std in pixel space (0..255), e.g. 2.55
+    lam: float = 0.23,
+    n_iter: int = 8,
+    sigma_max: float = 49.0,
+):
     device = y.device
-    ksize = psf.shape[-1]
-    p = ksize // 2
+    B, C, H, W = y.shape
 
-    # 1. Padding de la PSF à la taille de l'image
-    psf_padded = torch.zeros((1, 1, H, W), device=device, dtype=y.dtype)
-    psf_padded[:, :, :ksize, :ksize] = psf
+    sigma_img_n = sigma_img / 255.0
+    sigma_min = max(sigma_img, 0.1)
 
-    # 2. Centrage du noyau (Roll) : INDISPENSABLE pour l'alignement
-    psf_padded = torch.roll(psf_padded, shifts=(-p, -p), dims=(-2, -1))
+    # log schedule sigma_d: sigma_max -> sigma_min
+    sigmas_d = np.exp(np.linspace(np.log(sigma_max), np.log(sigma_min), n_iter))
 
-    # 3. FFT
     Y = torch.fft.fft2(y, dim=(-2, -1))
-    Z = torch.fft.fft2(z, dim=(-2, -1))
-    H_fft = torch.fft.fft2(psf_padded, dim=(-2, -1))
+    Hc = torch.conj(otf)
+    H2 = (otf.real ** 2 + otf.imag ** 2)  # |H|^2 reel
 
-    # 4. Formule de Wiener (Fidélité)
-    H_conj = torch.conj(H_fft)
-    # On utilise mu directement comme poids du prior
-    denominator = torch.abs(H_fft)**2 + mu + eps
-    x_hat = (H_conj * Y + mu * Z) / denominator
+    z = y.clone()
 
-    return torch.real(torch.fft.ifft2(x_hat, dim=(-2, -1))).clamp(0,1)
+    for k in range(n_iter):
+        sigma_d = float(sigmas_d[k])
+        sigma_d_n = sigma_d / 255.0
+
+        # mu = lambda / sigma_d^2
+        mu = lam / (sigma_d_n ** 2)
+
+        # alpha = mu * sigma_img^2 (matches paper scaling in x-step)
+        alpha = mu * (sigma_img_n ** 2)
+
+        Z = torch.fft.fft2(z, dim=(-2, -1))
+        denom = (H2 + alpha).to(torch.complex64)
+        numer = Hc[None, None, :, :] * Y + alpha * Z
+        X = numer / denom
+        x = torch.fft.ifft2(X, dim=(-2, -1)).real
+
+        # z-step = denoise(x, sigma_d)
+        expert = manager.get_expert(sigma_d)
+        z = expert.denoise(x).clamp(0, 1)
+
+    return z
+
+@torch.no_grad()
+def test_deblurring_dpir_with_levin09(
+    clean_path: str,
+    ckpt_path: str,
+    levin09_path: str = "kernels/Levin09.npy",
+    kernel_index: int = 0,
+    sigma_img: float = 2.55,
+    n_iter: int = 8,
+    lam: float = 0.23,
+    out_dir: str = "test_outputs_dpir_deblur",
+    seed: int = 0,
+):
+    os.makedirs(out_dir, exist_ok=True)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # load model and weights
+    model = IRCNNModelManager(ckpt_path, device=device)
+
+    # load clean image
+    clean_pil = Image.open(clean_path).convert("RGB")
+    x = TF.to_tensor(clean_pil).unsqueeze(0).to(device)  # (1,3,H,W)
+    B, C, H, W = x.shape
+
+    # load kernel Levin09 for blurring
+    k_np = load_levin09_kernel(levin09_path, kernel_index)
+    k = torch.from_numpy(k_np).to(device)
+
+    # blurring (circular) + add Gaussian noise
+    otf = psf_to_otf(k, (H, W))
+    blurry = circ_conv_fft(x, otf)
+
+    sigma_n = sigma_img / 255.0
+    g = torch.Generator(device=device).manual_seed(seed)
+    noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype, generator=g) * sigma_n
+    #except TypeError:
+        # fallback si generator n'est pas supporté
+     #   torch.manual_seed(seed)
+      #  noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype) * sigma_n
+
+    y = (blurry + noise).clamp(0.0, 1.0)
+
+    # ----- deblur (DPIR/HQS) -----
+    x_hat = dpir_hqs_deblur(
+        y=y, otf=otf, manager=model,
+        sigma_img=sigma_img, lam=lam, n_iter=n_iter, sigma_max=49.0
+    )
+
+    # ----- metrics -----
+    psnr_blur = psnr_torch(y.detach().cpu(), x.detach().cpu())
+    psnr_rec  = psnr_torch(x_hat.detach().cpu(), x.detach().cpu())
+    
+    ssim_blur = ssim_torch(y.detach().cpu(), x.detach().cpu())
+    ssim_rec  = ssim_torch(x_hat.detach().cpu(), x.detach().cpu())
+
+    # ----- save results -----
+    TF.to_pil_image(x.squeeze(0).cpu()).save(os.path.join(out_dir, "clean.png"))
+    TF.to_pil_image(y.squeeze(0).cpu()).save(os.path.join(out_dir, f"blurry_k{kernel_index}_sigma{sigma_img:.2f}.png"))
+    TF.to_pil_image(x_hat.squeeze(0).cpu()).save(os.path.join(out_dir, f"restored_k{kernel_index}_sigma{sigma_img:.2f}.png"))
+
+    # kernel visualization
+    k_vis = (k / (k.max() + 1e-12)).detach().cpu().numpy()
+    k_vis = (k_vis * 255.0).clip(0, 255).astype(np.uint8)
+    Image.fromarray(k_vis).save(os.path.join(out_dir, f"kernel_k{kernel_index}.png"))
+
+    print("Saved to:", out_dir)
+    print(f"Kernel index     : {kernel_index}")
+    print(f"Noise sigma_img  : {sigma_img:.2f} (pixel space)")
+    print(f"DPIR n_iter      : {n_iter}, lambda={lam}")
+    print(f"PSNR blurry/noisy: {psnr_blur:.2f} dB")
+    print(f"PSNR restored    : {psnr_rec:.2f} dB")
+    print(f"SSIM blurry/noisy: {ssim_blur:.2f}")
+    print(f"SSIM restored    : {ssim_rec:.2f}")
+    
+
+'''test_deblurring_dpir_with_levin09(
+    clean_path="./BSDS300/images/test/37073.jpg",
+    ckpt_path="./weights_ircnn",
+    levin09_path="kernels/Levin09.npy",
+    kernel_index=0,
+    sigma_img=2.55,
+    n_iter=8,
+    lam=0.23,
+    out_dir="./results_IRCNN/deblur_single",
+ )'''
+ 
+ 
+@torch.no_grad()
+def run_deblur_one_return_metrics(
+    clean_path: str,
+    ckpt_path: str,
+    levin09_path: str = "kernels/Levin09.npy",
+    kernel_index: int = 0,
+    sigma_img: float = 2.55,
+    n_iter: int = 8,
+    lam: float = 0.23,
+    seed: int = 0,
+    save_outputs: bool = False,
+    out_dir: str = "./results_IRCNN/deblur_benchmark",
+):
+    if save_outputs:
+        os.makedirs(out_dir, exist_ok=True)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # ----- load model -----
+    model = IRCNNModelManager(ckpt_path, device=device)
+
+    # ----- load clean image -----
+    clean_pil = Image.open(clean_path).convert("RGB")
+    x = TF.to_tensor(clean_pil).unsqueeze(0).to(device)  # (1,3,H,W)
+    _, _, H, W = x.shape
+
+    # ----- load kernel Levin09 -----
+    k_np = load_levin09_kernel(levin09_path, kernel_index)
+    k = torch.from_numpy(k_np).to(device)
+
+    # ----- blur (circular) + add Gaussian noise -----
+    otf = psf_to_otf(k, (H, W))
+    blurry = circ_conv_fft(x, otf)
+
+    sigma_n = sigma_img / 255.0
+    try:
+        g = torch.Generator(device=device).manual_seed(seed)
+        noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype, generator=g) * sigma_n
+    except TypeError:
+        torch.manual_seed(seed)
+        noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype) * sigma_n
+
+    y = (blurry + noise).clamp(0.0, 1.0)
+
+    # ----- deblur (DPIR/HQS) -----
+    x_hat = dpir_hqs_deblur(
+        y=y, otf=otf, manager=model,
+        sigma_img=sigma_img, lam=lam, n_iter=n_iter, sigma_max=49.0
+    )
+
+    # ----- metrics -----
+    x_cpu = x.detach().cpu()
+    y_cpu = y.detach().cpu()
+    xhat_cpu = x_hat.detach().cpu()
+
+    psnr_blur = psnr_torch(y_cpu, x_cpu)
+    psnr_rec  = psnr_torch(xhat_cpu, x_cpu)
+    
+    ssim_blur = ssim_torch(y_cpu, x_cpu)
+    ssim_rec  = ssim_torch(xhat_cpu, x_cpu)
+
+    # ----- optional save -----
+    if save_outputs:
+        base = os.path.splitext(os.path.basename(clean_path))[0]
+        TF.to_pil_image(x_cpu.squeeze(0)).save(os.path.join(out_dir, f"{base}_clean.png"))
+        TF.to_pil_image(y_cpu.squeeze(0)).save(os.path.join(out_dir, f"{base}_blurry_k{kernel_index}_sig{sigma_img:.2f}.png"))
+        TF.to_pil_image(xhat_cpu.squeeze(0)).save(os.path.join(out_dir, f"{base}_restored_k{kernel_index}_sig{sigma_img:.2f}.png"))
+
+    return {
+        "filename": os.path.basename(clean_path),
+        "path": clean_path,
+        "kernel_index": kernel_index,
+        "sigma_img": float(sigma_img),
+        "n_iter": int(n_iter),
+        "lambda": float(lam),
+        "seed": int(seed),
+        "psnr_blurry_db": float(psnr_blur),
+        "psnr_restored_db": float(psnr_rec),
+        "gain_db": float(psnr_rec - psnr_blur),
+        "ssim_blurry": float(ssim_blur),
+        "ssim_restored": float(ssim_rec),
+        "ssim_gain": float(ssim_rec - ssim_blur),
+    }
 
 
-class IRCNNModelManager:
-    """ Gère le chargement dynamique des 10 experts. """
-    def __init__(self, model_dir, device="cpu"):
-        self.model_dir = model_dir
-        self.device = device
-        self.available_sigmas = [2*i for i in range(1,26)]
-        self.model = IRCNNFixed(n_filters=64).to(device)
-        self.current_sigma = None
+@torch.no_grad()
+def benchmark_dpir_deblur_to_csv(
+    test_dir: str,
+    ckpt_path: str,
+    levin09_path: str = "kernels/Levin09.npy",
+    kernel_index: int = 0,
+    sigma_img: float = 2.55,
+    n_iter: int = 8,
+    lam: float = 0.23,
+    n_images: int = 10,
+    seed: int = 0,
+    out_dir: str = "./results_IRCNN/deblur_benchmark",
+    save_examples: bool = False,
+):
+    os.makedirs(out_dir, exist_ok=True)
 
-    def get_expert(self, target_sigma):
-        # Trouver l'expert le plus proche (ex: target 12.5 -> expert 15)
-        closest = min(self.available_sigmas, key=lambda x: abs(x - target_sigma))
-        if closest != self.current_sigma:
-            path = os.path.join(self.model_dir, f"ircnn_sigma_{closest}_final.pth")
-            state = torch.load(path, map_location=self.device)
-            self.model.load_state_dict(state["model"])
-            self.model.eval()
-            self.current_sigma = closest
-        return self.model
+    all_paths = list_images(test_dir)
+    if len(all_paths) == 0:
+        raise RuntimeError(f"No images found in {test_dir}")
+    if len(all_paths) < n_images:
+        raise RuntimeError(f"Not enough images: {len(all_paths)} < {n_images}")
 
+    rng = random.Random(seed)
+    chosen = rng.sample(all_paths, n_images)
 
-def calculate_psnr(x, y, eps=1e-8):
-    """
-    Calcule le PSNR entre deux images img1 et img2 (tensors entre 0 et 1).
-    """
-    mse = torch.mean((x - y) ** 2).item()
-    return 10.0 * math.log10(1.0 / (mse + eps))
+    rows = []
+    for i, p in enumerate(chosen):
+        # seed différent par image pour le bruit
+        row = run_deblur_one_return_metrics(
+            clean_path=p,
+            ckpt_path=ckpt_path,
+            levin09_path=levin09_path,
+            kernel_index=kernel_index,
+            sigma_img=sigma_img,
+            n_iter=n_iter,
+            lam=lam,
+            seed=seed + i,
+            save_outputs=save_examples,
+            out_dir=out_dir,
+        )
+        rows.append(row)
+        print(f"[{i+1}/{n_images}] {row['filename']} | PSNR blurry {row['psnr_blurry_db']:.2f} -> restored {row['psnr_restored_db']:.2f} dB | SSIM blurry {row['ssim_blurry']:.2f} -> restored {row['ssim_restored']:.2f}")
 
+    df = pd.DataFrame(rows)
 
-# --- Fonction principale de Défloutage ---
+    mean_blur_psnr = df["psnr_blurry_db"].mean()
+    mean_rest_psnr = df["psnr_restored_db"].mean()
+    mean_gain_psnr = df["gain_db"].mean()
+    
+    mean_blur_ssim = df["ssim_blurry"].mean()
+    mean_rest_ssim = df["ssim_restored"].mean()
+    mean_gain_ssim = df["ssim_gain"].mean()
 
-def test_deblur_pnp(
+    csv_path = os.path.join(
+        out_dir,
+        f"dpir_deblur_benchmark_{n_images}imgs_k{kernel_index}_sig{sigma_img:.2f}_K{n_iter}_lam{lam}_seed{seed}.csv"
+    )
+    df.to_csv(csv_path, index=False)
+
+    print("\n=== Moyennes (DPIR deblur) ===")
+    print(f"PSNR blurry   : {mean_blur_psnr:.2f} dB")
+    print(f"PSNR restored : {mean_rest_psnr:.2f} dB")
+    print(f"Gain          : {mean_gain_psnr:.2f} dB")
+    print(f"SSIM blurry   : {mean_blur_ssim:.2f}")
+    print(f"SSIM restored : {mean_rest_ssim:.2f}")
+    print(f"Gain SSIM       : {mean_gain_ssim:.2f}")
+    print("CSV saved:", csv_path)
+
+    return df, csv_path
+
+if __name__ == "__main__":
+  #  test_deblurring_dpir_with_levin09(
+   #      clean_path="./BSDS300/images/test/37073.jpg",
+   #      ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
+   #      levin09_path="kernels/Levin09.npy",
+   #      kernel_index=0,
+    #     sigma_img=2.55,
+    #     n_iter=8,
+   #      lam=0.23,
+   #      out_dir="results_DRUNET/results_DRUNET_deblur",
+ #)
+
+    benchmark_dpir_deblur_to_csv(
+        test_dir="./BSDS300/images/test",
+        ckpt_path="./weights_ircnn",
+        levin09_path="kernels/Levin09.npy",
+        kernel_index=0,
+        sigma_img=2.55,
+        n_iter=8,
+        lam=0.23,
+        n_images=10,
+        seed=0,
+        out_dir="./results_IRCNN/deblur_benchmark",
+        save_examples=False,
+    )
+    
+
+'''def deblur_ircnnv2_vf(
     image_path,
     model_dir=r"./IRCNN_v2/weights_ircnn_experts_colab",
-    out_dir=r"./IRCNN_v2/tests_deblur",
-    sigma_n_pixels=2, # Bruit réel de l'image (estimé)
-    lambda_pnp=3,     # Paramètre de régularisation (à augmenter avec niveau de flou+bruit) -> trouver méthode pour l'estimer en cas d'image inconnue, entre 2 et 5 d'après mon petit test
-    ksize=15,
-    n_iter=20,
-    blur_sigma=1.6,
-    noise_sigma=5
+    out_dir=r"./benchmark/deblur/ircnnv2",
+    levin09_path=r"./kernels/Levin09.npy",
+    kernel_index=0,
+    lambda_pnp=3,
+    n_iter=15,
+    noise_sigma=5,
+    seed=0,
+    conv_threshold=1
 ):
     os.makedirs(out_dir, exist_ok=True)
     device = torch.device("cpu")
@@ -95,38 +374,40 @@ def test_deblur_pnp(
     img_pil = Image.open(image_path).convert("RGB")
     clean = TF.to_tensor(img_pil).unsqueeze(0).to(device)
     _, _, H, W = clean.shape
+    
+    # ----- load kernel Levin09 -----
+    k_np = load_levin09_kernel(levin09_path, kernel_index)
+    k = torch.from_numpy(k_np).to(device)
 
-    ksize = 15
-    p = ksize // 2
-    psf = gaussian_psf(ksize=ksize, sigma=blur_sigma, device=device)
+    # ----- blur (circular) + add Gaussian noise -----
+    otf = psf_to_otf(k, (H, W))
+    blurry = circ_conv_fft(clean, otf)
 
-    psf_padded = torch.zeros((1, 1, H, W), device=device)
-    psf_padded[:, :, :ksize, :ksize] = psf
-    psf_padded = torch.roll(psf_padded, shifts=(-p, -p), dims=(2, 3))
+    sigma_n = noise_sigma / 255.0
+    try:
+        g = torch.Generator(device=device).manual_seed(seed)
+        noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype, generator=g) * sigma_n
+    except TypeError:
+        torch.manual_seed(seed)
+        noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype) * sigma_n
 
-    # Flou
-    clean_fft = torch.fft.fft2(clean)
-    psf_fft = torch.fft.fft2(psf_padded)
-    y_blurred = torch.real(torch.fft.ifft2(clean_fft * psf_fft))
-
-    # Ajout du bruit
-    noise = torch.randn_like(y_blurred) * (noise_sigma / 255.0)
-    y = (y_blurred + noise).clamp(0, 1)
+    y = (blurry + noise).clamp(0.0, 1.0)
 
     # 2. Préparer les itérations (30 itérations de sigma=49 à sigma=sigma_n)
     manager = IRCNNModelManager(model_dir, device=device)
-    sigmas_k = np.logspace(np.log10(49), np.log10(sigma_n_pixels), n_iter)
+    sigmas_k = np.logspace(np.log10(49), np.log10(noise_sigma), n_iter)
 
     # 3. Calcul des PSNR
-    psnr_blurred = calculate_psnr(y_blurred, clean)
-    psnr_blurred_noisy = calculate_psnr(y, clean)
+    psnr_degraded = calculate_psnr(y, clean)
     
     x = y.clone()
     best_psnr = -float("inf")
     best_x = x.clone()
     best_mu = 0
-    mus=[0]
-    psnr1, psnr2=[psnr_blurred_noisy], [psnr_blurred_noisy]
+    mus=[]
+    psnr1, psnr2=[], []
+    x1, x2=[], []
+    conv = False
     
     #print(f"Début du défloutage HQS ({n_iter} itérations)...")
     for i, sk in enumerate(sigmas_k):
@@ -134,107 +415,44 @@ def test_deblur_pnp(
         mu = lambda_pnp / (sk**2)
 
         # Étape A : Fidélité (FFT)
-        x = solve_fidelity_fft(y, x, psf, mu)
-        psnr1.append(calculate_psnr(x, clean))
-
+        x = solve_fidelity_fft(y, x, k, mu)
+        p1 = calculate_psnr(x, clean)
+        psnr1.append(p1)
+        x1.append(x.clone())
         # Étape B : Prior (Expert CNN)
         expert = manager.get_expert(sk)
         with torch.no_grad():
             x = expert.denoise(x).clamp(0, 1)
         mus.append(mu)
-        p = calculate_psnr(x, clean)
-        psnr2.append(p)
-        if p > best_psnr:
-            best_psnr = p
+        p2 = calculate_psnr(x, clean)
+        psnr2.append(p2)
+        x2.append(x.clone())
+        if abs(p2-p1)<conv_threshold and max(p1,p2)>best_psnr:
+            best_psnr = max(p1,p2)
             best_x = x.clone()
             best_mu = mu
+            conv = True
 
-    # psnr_deblurred = calculate_psnr(x, clean)
-    improvement = best_psnr - psnr_blurred_noisy
-
-    print(f"\n--- Résultats ---")
-    print(f"PSNR Blurred       : {psnr_blurred:.2f} dB")
-    print(f"PSNR Blurred+Noisy : {psnr_blurred_noisy:.2f} dB")
-    print(f"PSNR Deblurred     : {best_psnr:.2f} dB for mu = {best_mu:.2f}")
-    print(f"Gain               : {improvement:.2f} dB")
-
+    if not conv:
+        idx_max1, val_max1 = max(enumerate(psnr1), key=lambda x: x[1])
+        idx_max2, val_max2 = max(enumerate(psnr2), key=lambda x: x[1])
+        if val_max1>val_max2:
+            best_psnr=val_max1
+            best_x=x1[idx_max1]
+        else:
+            best_psnr=val_max2
+            best_x=x2[idx_max2]
+            
     # 4. Sauvegarde et résultats
     img_id = os.path.splitext(os.path.basename(image_path))[0]
-    TF.to_pil_image(clean.squeeze(0)).save(os.path.join(out_dir, f"{img_id}_input_cleaned.png"))
-    TF.to_pil_image(y.squeeze(0)).save(os.path.join(out_dir, f"{img_id}_input_blurred_noisy.png"))
-    TF.to_pil_image(best_x.squeeze(0)).save(os.path.join(out_dir, f"{img_id}_output_deblurred.png"))
-    print(f"Terminé ! Images sauvegardées dans le dossier '{out_dir}'.")
-    '''plt.plot(mus,psnr1,'o')
-    plt.plot(mus,psnr2,'x')
-    plt.axvline(x=best_mu, color='red', linestyle='--', linewidth=2)
-    plt.show()'''
-
-import random
-
-# Choix aléatoire de l'image test
-IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff")
-clean_dir = r"./BSDS300/images/test" 
-paths = [
-            os.path.join(clean_dir, f) for f in os.listdir(clean_dir)
-            if f.lower().endswith(IMG_EXT)
-        ]
-
-assert len(paths) > 0, f"Aucune image trouvée dans {clean_dir}"
-image_path = random.choice(paths)
-print("Image choisie:", image_path)
-test_deblur_pnp(image_path=image_path)
-
-# Importance de lambda selon niveau de flou et bruit
-
-'''
-scenarios = [
-    {"blur_sigma": 1.0, "noise_sigma": 2,  "label": "Blur=1.0 / Noise=2"},
-    {"blur_sigma": 1.6, "noise_sigma": 5,  "label": "Blur=1.6 / Noise=5"},
-    {"blur_sigma": 2.2, "noise_sigma": 10, "label": "Blur=2.2 / Noise=10"},
-]
-
-lambda_list = [0.1, 0.2, 0.5, 1, 2, 5, 10]
-
-best_psnrs = []
-
-results = {}  # {label: [psnr_lambda1, psnr_lambda2, ...]}
-
-for scen in scenarios:
-    label = scen["label"]
-    blur_sigma = scen["blur_sigma"]
-    noise_sigma = scen["noise_sigma"]
-
-    print(f"\n=== Scenario: {label} ===")
-    psnrs = []
-
-    for lam in lambda_list:
-        print(f"  -> lambda = {lam}")
-
-        best_psnr = test_deblur_pnp(
-            image_path=image_path,
-            lambda_pnp=lam,
-            n_iter=10,
-            blur_sigma=blur_sigma,
-            noise_sigma=noise_sigma,
-            sigma_n_pixels=2,
-            ksize=15
-        )
-
-        psnrs.append(best_psnr)
-        print(f"     Best PSNR = {best_psnr:.2f} dB")
-
-    results[label] = psnrs
+    img_dir = os.path.join(out_dir, img_id)
+    os.makedirs(img_dir, exist_ok=True)
+    TF.to_pil_image(clean.squeeze(0)).save(os.path.join(img_dir, f"clean.png"))
+    TF.to_pil_image(y.squeeze(0)).save(os.path.join(img_dir, f"degraded.png"))
+    TF.to_pil_image(best_x.squeeze(0)).save(os.path.join(img_dir, f"deblurred_ircnnv2.png"))
     
-plt.figure(figsize=(8,6))
+    return best_psnr
 
-for label, psnrs in results.items():
-    plt.semilogx(lambda_list, psnrs, marker='o', label=label)
-
-plt.xlabel("lambda (regularization weight)")
-plt.ylabel("Best PSNR over iterations (dB)")
-plt.title("Influence of lambda for different blur / noise levels (IRCNN Deblurring)")
-plt.grid(True, which="both", linestyle="--", alpha=0.5)
-plt.legend()
-plt.tight_layout()
-plt.show()
-'''
+image_path = r"./BSDS300/images/test\37073.jpg"
+print("Image choisie:", image_path)
+print(deblur_ircnnv2_vf(image_path=image_path))'''
