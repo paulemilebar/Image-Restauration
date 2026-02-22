@@ -3,7 +3,8 @@ import torch
 from PIL import Image
 import torchvision.transforms.functional as TF
 from DRUNet import DRUNetSigmaMap
-from DRUNet_deblur import load_levin09_kernel, psf_to_otf, circ_conv_fft, psnr_torch
+from DRUNet_deblur import load_levin09_kernel, psf_to_otf, circ_conv_fft
+from DRUNet_denoise import psnr_torch, ssim_torch
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -53,6 +54,8 @@ def dpir_hqs_deblur_with_trace(
         "dz_rel": [],      # rmse(z-z_prev)/rmse(z_prev)
         "psnr_z": [], 
         "psnr_x": [], 
+        "ssim_z": [], 
+        "ssim_x": [], 
     }
 
     for k in range(n_iter):
@@ -88,6 +91,8 @@ def dpir_hqs_deblur_with_trace(
 
         psnr_z = psnr_torch(z.detach().cpu(), x_gt.detach().cpu()) if x_gt is not None else float("nan")
         psnr_x = psnr_torch(x.detach().cpu(), x_gt.detach().cpu()) if x_gt is not None else float("nan")
+        ssim_z = ssim_torch(z.detach().cpu(), x_gt.detach().cpu()) if x_gt is not None else float("nan")
+        ssim_x = ssim_torch(x.detach().cpu(), x_gt.detach().cpu()) if x_gt is not None else float("nan")
 
 
         logs["k"].append(k)
@@ -99,6 +104,8 @@ def dpir_hqs_deblur_with_trace(
         logs["dz_rel"].append(dz_rel)
         logs["psnr_z"].append(psnr_z)
         logs["psnr_x"].append(psnr_x)
+        logs["ssim_z"].append(ssim_z)
+        logs["ssim_x"].append(ssim_x)
 
         if save_dir is not None and (k % save_every == 0 or k == n_iter - 1):
             TF.to_pil_image(z.squeeze(0).detach().cpu()).save(os.path.join(save_dir, f"z_iter{k:02d}.png"))
@@ -178,6 +185,8 @@ def test_deblurring_dpir_with_levin09_convergence(
     # metrics
     psnr_blur = psnr_torch(y.detach().cpu(), x.detach().cpu())
     psnr_rec  = psnr_torch(x_hat.detach().cpu(), x.detach().cpu())
+    ssim_blur = ssim_torch(y.detach().cpu(), x.detach().cpu())
+    ssim_rec  = ssim_torch(x_hat.detach().cpu(), x.detach().cpu())
 
     # save outputs
     TF.to_pil_image(x.squeeze(0).cpu()).save(os.path.join(out_dir, "clean.png"))
@@ -195,6 +204,8 @@ def test_deblurring_dpir_with_levin09_convergence(
     print("\nFinal:")
     print(f"PSNR blurry/noisy: {psnr_blur:.2f} dB")
     print(f"PSNR restored    : {psnr_rec:.2f} dB")
+    print(f"SSIM blurry/noisy: {ssim_blur:.2f}")
+    print(f"SSIM restored    : {ssim_rec:.2f}")
     if save_iters:
         print(f"Intermediate z_k images saved in: {it_dir}")
 
@@ -205,15 +216,15 @@ logs = test_deblurring_dpir_with_levin09_convergence(
     ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
     levin09_path="kernels/Levin09.npy",
     kernel_index=0,
-    sigma_img=2.55,
-    n_iter=15,
+    sigma_img=5,
+    n_iter=30,
     lam=0.23,
     out_dir="results_DRUNET/results_DRUNET_deblur_courbes",
     seed=0,
     save_iters=True
 )
 
-def plot_convergence_curves(logs, title="DPIR/HQS convergence"):
+def plot_convergence_curves(logs, title="DPIR/HQS convergence", save_dir ="results_DRUNET/results_DRUNET_deblur_courbes"):
     ks = np.array(logs["k"])
     sigma_d = np.array(logs["sigma_d"])
     data_rmse = np.array(logs["data_rmse"])
@@ -222,40 +233,56 @@ def plot_convergence_curves(logs, title="DPIR/HQS convergence"):
     dz_rel = np.array(logs["dz_rel"])
     psnr_z = np.array(logs["psnr_z"])
     psnr_x = np.array(logs["psnr_x"])
+    ssim_z = np.array(logs["ssim_z"])
+    ssim_x = np.array(logs["ssim_x"])
 
     # 1) data fidelity + x-z consistency
     plt.figure()
-    plt.plot(ks, data_rmse, marker="o", label="RMSE(y - Hx_k)")
-    plt.plot(ks, xz_rmse, marker="o", label="RMSE(x_k - z_k)")
+    plt.plot(ks, data_rmse, label="RMSE(y - Hx_k)")
+    plt.plot(ks, xz_rmse, label="RMSE(x_k - z_k)")
     plt.xlabel("iteration k")
     plt.ylabel("RMSE")
     plt.title(title + " | data & consistency")
     plt.legend()
+    plt.savefig(os.path.join(save_dir, f"rmse.png"), dpi=200)
     plt.grid(True)
 
     # 2) relative changes
     plt.figure()
-    plt.plot(ks, dx_rel, marker="o", label="rel change x_k")
-    plt.plot(ks, dz_rel, marker="o", label="rel change z_k")
+    plt.plot(ks, dx_rel, label="rel change x_k")
+    plt.plot(ks, dz_rel, label="rel change z_k")
     plt.xlabel("iteration k")
     plt.ylabel("relative change")
     plt.title(title + " | relative updates")
     plt.legend()
+    plt.savefig(os.path.join(save_dir, f"relative_changes.png"), dpi=200)
     plt.grid(True)
 
-    # 3) PSNR(z_k) (if available)
-    if np.isfinite(psnr_z).any():
-        plt.figure()
-        plt.plot(ks, psnr_z, marker="o")
-        plt.plot(ks, psnr_z, marker="o")
-        plt.xlabel("iteration k")
-        plt.ylabel("PSNR(z_k) [dB]")
-        plt.title(title + " | PSNR(z_k)")
-        plt.grid(True)
+    # 3) PSNR
+    plt.figure()
+    plt.plot(ks, psnr_x, label="PSNR x_k")
+    plt.plot(ks, psnr_z, label="PSNR z_k")
+    plt.xlabel("iteration k")
+    plt.ylabel("PSNR(z_k) and PSNR(x_k) [dB]")
+    plt.title(title + " | PSNR(z_k) and PSNR(x_k)")
+    plt.legend()
+    plt.savefig(os.path.join(save_dir, f"psnr.png"), dpi=200)
+    plt.grid(True)
+    
+    # 3) SSIM
+    plt.figure()
+    plt.plot(ks, ssim_x, label="SSIM x_k")
+    plt.plot(ks, ssim_z, label="SSIM z_k")
+    plt.xlabel("iteration k")
+    plt.ylabel("SSIM(z_k) and SSIM(x_k)")
+    plt.title(title + " | SSIM(z_k) and SSIM(x_k)")
+    plt.legend()
+    plt.savefig(os.path.join(save_dir, f"ssim.png"), dpi=200)
+    plt.grid(True)
 
     # 4) sigma schedule
     plt.figure()
-    plt.plot(ks, sigma_d, marker="o")
+    plt.plot(ks, sigma_d)
     plt.xlabel("iteration k")
     plt.ylabel("sigma_d (pixel space)")
     plt.title(title + " | sigma schedule")
@@ -263,4 +290,4 @@ def plot_convergence_curves(logs, title="DPIR/HQS convergence"):
 
     plt.show()
 
-plot_convergence_curves(logs, title="k0 sigma=2.55")
+plot_convergence_curves(logs, save_dir = "results_DRUNET/results_DRUNET_deblur_courbes")

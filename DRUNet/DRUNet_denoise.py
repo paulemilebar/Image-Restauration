@@ -84,6 +84,8 @@ def run_single_image_demo(
     sigma: float = 20.0,
     seed: int = 0,
     modulo: int = 8,
+    ircnn_model_dir: str = "./IRCNN_v2/weights_ircnn_experts_colab",
+    ircnn_lambda: float = 1.0,
 ) -> Dict[str, float]:
     """
     Load clean image, add AWGN, denoise, save clean/noisy/denoised, print PSNR.
@@ -216,8 +218,8 @@ def benchmark_drunet_random(
 
 if __name__ == "__main__":
     # 1) One image (qualitative + PSNR + saves)
-    #run_single_image_demo(clean_path="./BSDS300/images/test/37073.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_single", sigma=70.0, seed=0)
+    run_single_image_demo(clean_path="./BSDS300/images/test/37073.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_single", sigma=150.0, seed=0)
 
     # 2) Benchmark N images (table + CSV)
-    benchmark_drunet_random(test_dir="./BSDS300/images/test", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_benchmark", sigma=20.0, n_images=10, seed=0, save_examples=False)
+    #benchmark_drunet_random(test_dir="./BSDS300/images/test", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_benchmark", sigma=20.0, n_images=10, seed=0, save_examples=False)
 
