@@ -9,8 +9,8 @@ from tqdm import tqdm
 from IRCNN import FixedSigmaPatchDataset, IRCNNFixed
 
 def train_all_experts(
-    clean_dir=r"./BSDS300/images/train",
-    base_out_dir=r"./IRCNN_v2/weights_ircnn_experts_colab",
+    clean_dir="./BSDS300/images/train",
+    base_out_dir="./IRCNN_v2/weights_ircnn",
     patch=35,
     sigmas=[2*i for i in range(1,26)],
     batch_size=8,

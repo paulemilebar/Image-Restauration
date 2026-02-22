@@ -229,7 +229,7 @@ def dpir_hqs_inpaint(
     return (z, metrics) if track_convergence else z
 
 
-def inpainting_ircnn(
+'''def inpainting_ircnn(
     clean_path,
     ircnn_ckpt="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
     out_dir="./results_IRCNN_sigmamap/inpainting_single_v2",
@@ -286,7 +286,7 @@ def inpainting_ircnn(
     
 clean_path = r"./BSDS300/images/test\87046.jpg"
 print("Image choisie:", clean_path)
-inpainting_ircnn(clean_path=clean_path)
+inpainting_ircnn(clean_path=clean_path)'''
 
 
 

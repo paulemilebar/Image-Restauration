@@ -122,7 +122,7 @@ denoise_ircnn(
 '''
 
 @torch.no_grad()
-def benchmark_drunet_random(
+def benchmark_ircnn_sigmap(
     test_dir: str,
     ckpt_path: str,
     out_dir: str = r"./results_IRCNN_sigmamap/denoise_benchmark",
@@ -223,5 +223,5 @@ if __name__ == "__main__":
     #run_single_image_demo(clean_path="./BSDS300/images/test/37073.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_single", sigma=70.0, seed=0)
 
     # 2) Benchmark N images (table + CSV)
-    benchmark_drunet_random(test_dir="./BSDS300/images/test", ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth", out_dir="results_IRCNN_sigmamap/denoise_benchmark", sigma=20.0, n_images=10, seed=0, save_examples=False)
+    benchmark_ircnn_sigmap(test_dir="./BSDS300/images/test", ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth", out_dir="results_IRCNN_sigmamap/denoise_benchmark", sigma=20.0, n_images=10, seed=0, save_examples=False)
 

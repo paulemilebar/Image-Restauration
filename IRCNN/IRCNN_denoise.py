@@ -1,238 +1,201 @@
-import os, math
+import os, math, random
 import torch
 import numpy as np
+import pandas as pd
 from PIL import Image
 import torchvision.transforms.functional as TF
 import torch.fft
-try:
-    # Tentative pour quand on lance depuis le Benchmark
-    from IRCNN.IRCNN_final import IRCNNModelManager
-except ModuleNotFoundError:
-    # Repli pour quand on lance le fichier en direct
-    from IRCNN.IRCNN_final import IRCNNModelManager
+from IRCNN_final import IRCNNModelManager
 import matplotlib.pyplot as plt
+from torchmetrics.functional.image.ssim import structural_similarity_index_measure as ssim_fn
+from typing import List, Tuple, Optional, Dict
 
 # --- Fonctions Utilitaires ---
+def psnr_torch(x01: torch.Tensor, y01: torch.Tensor, eps: float = 1e-8) -> float:
+    mse = torch.mean((x01 - y01) ** 2).item()
+    return 10.0 * math.log10(1.0 / (mse + eps))
+
+def ssim_torch(x, y, data_range=1.0):
+    return float(ssim_fn(x, y, data_range=data_range).item())
+
+def list_images(folder: str, exts=(".png", ".jpg", ".jpeg")) -> List[str]:
+    paths = []
+    for root, _, files in os.walk(folder):
+        for fn in files:
+            if fn.lower().endswith(exts):
+                paths.append(os.path.join(root, fn))
+    return sorted(paths)
+
+
+def add_awgn(clean01: torch.Tensor, sigma: float, seed: int = 0, device: Optional[torch.device] = None) -> torch.Tensor:
+    """
+    clean01: (1,3,H,W) in [0,1]
+    returns noisy = clean + N(0, (sigma/255)^2)
+    """
+    if device is None:
+        device = clean01.device
+    sigma01 = sigma / 255.0
+    g = torch.Generator(device=device).manual_seed(seed)
+    noise = torch.randn(clean01.shape, generator=g, device=device, dtype=clean01.dtype) * sigma01
+    return clean01.to(device) + noise
+
 
 def solve_fidelity_denoise(y, z, mu):
      return (y + mu * z) / (1 + mu)
 
 
-def calculate_psnr(x, y, eps=1e-8):
-    """
-    Calcule le PSNR entre deux images img1 et img2 (tensors entre 0 et 1).
-    """
-    mse = torch.mean((x - y) ** 2).item()
-    return 10.0 * math.log10(1.0 / (mse + eps))
-
-
-# --- Fonction principale de Défloutage ---
-
-def test_denoise_pnp(
-    image_path,
-    model_dir=r"./IRCNN_v2/weights_ircnn_experts_colab",
-    out_dir=r"./IRCNN_v2/tests_denoise",
-    noise_sigma=40,
-    sigma_n_pixels=2, # Bruit réel de l'image (estimé)
-    lambda_pnp=1,     # Paramètre de régularisation (à ajuster)
-    n_iter=20
-):
-    os.makedirs(out_dir, exist_ok=True)
-    device = torch.device("cpu")
-
-    # 1. Charger l'image et préparer le flou
-    img_pil = Image.open(image_path).convert("RGB")
-    clean = TF.to_tensor(img_pil).unsqueeze(0).to(device)
-
-    # Ajout du bruit
-    noise = torch.randn_like(clean) * (noise_sigma / 255.0)
-    y = (clean + noise).clamp(0, 1)
-
-    # 2. Préparer les itérations (30 itérations de sigma=49 à sigma=sigma_n)
-    manager = IRCNNModelManager(model_dir, device=device)
-    sigmas_k = np.logspace(np.log10(49), np.log10(sigma_n_pixels), n_iter)
-
-    x = y.clone()
-    best_psnr = -float("inf")
-    best_x = x.clone()
-    best_mu = 0
-    mus=[]
-    psnr=[]
-    # print(f"Début du défloutage HQS ({n_iter} itérations)...")
-    for i, sk in enumerate(sigmas_k):
-        # sigma_d = sk / 255.0
-        mu = lambda_pnp / (sk **2)
-
-        # Étape A : Fidélité (FFT)
-        x = solve_fidelity_denoise(y, x, mu)
-
-        # Étape B : Prior (Expert CNN)
-        expert = manager.get_expert(sk)
-        with torch.no_grad():
-            x = expert.denoise(x).clamp(0, 1)
-        mus.append(mu)
-        p = calculate_psnr(x, clean)
-        psnr.append(p)
-        if p > best_psnr:
-            best_psnr = p
-            best_x = x.clone()
-            best_mu = mu
-
-    # 3. Calcul des PSNR
-    psnr_noisy = calculate_psnr(y, clean)
-    # psnr_denoised = calculate_psnr(x, clean)
-    improvement = best_psnr - psnr_noisy
-
-    print(f"\n--- Résultats ---")
-    print(f"PSNR Noisy    : {psnr_noisy:.2f} dB")
-    print(f"PSNR Denoised : {best_psnr:.2f} dB for mu = {best_mu:.2f}")
-    print(f"Gain          : {improvement:.2f} dB")
-
-    # 4. Sauvegarde et résultats
-    img_id = os.path.splitext(os.path.basename(image_path))[0]
-    TF.to_pil_image(clean.squeeze(0)).save(os.path.join(out_dir, f"{img_id}_input_cleaned.png"))
-    TF.to_pil_image(y.squeeze(0)).save(os.path.join(out_dir, f"{img_id}_input_noisy.png"))
-    TF.to_pil_image(best_x.squeeze(0)).save(os.path.join(out_dir, f"{img_id}_output_denoised.png"))
-    print(f"Terminé ! Images sauvegardées dans le dossier '{out_dir}'.")
-    '''plt.plot(mus,psnr,'o')
-    plt.show()'''
-
-
-import random
-
-# Choix aléatoire de l'image test
-IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff")
-clean_dir = r"./BSDS300/images/test" 
-paths = [
-            os.path.join(clean_dir, f) for f in os.listdir(clean_dir)
-            if f.lower().endswith(IMG_EXT)
-        ]
-
-assert len(paths) > 0, f"Aucune image trouvée dans {clean_dir}"
-image_path = random.choice(paths)
-
-
-# Importance de lambda selon niveau de bruit -> pas très important
-
-'''
-scenarios = [
-    {"noise_sigma": 2,  "label": "Noise=2"},
-    {"noise_sigma": 10,  "label": "Noise=10"},
-    {"noise_sigma": 50, "label": "Noise=50"},
-]
-
-lambda_list = [0.1, 0.2, 0.5, 1, 2, 5, 10]
-
-best_psnrs = []
-
-results = {}  # {label: [psnr_lambda1, psnr_lambda2, ...]}
-
-for scen in scenarios:
-    label = scen["label"]
-    noise_sigma = scen["noise_sigma"]
-
-    print(f"\n=== Scenario: {label} ===")
-    psnrs = []
-
-    for lam in lambda_list:
-        print(f"  -> lambda = {lam}")
-
-        best_psnr = test_denoise_pnp(
-            image_path=image_path,
-            noise_sigma=noise_sigma,
-            sigma_n_pixels=noise_sigma,
-            lambda_pnp=lam,
-            n_iter=10
-        )
-
-        psnrs.append(best_psnr)
-        print(f"     Best PSNR = {best_psnr:.2f} dB")
-
-    results[label] = psnrs
-    
-plt.figure(figsize=(8,6))
-
-for label, psnrs in results.items():
-    plt.semilogx(lambda_list, psnrs, marker='o', label=label)
-
-plt.xlabel("lambda (regularization weight)")
-plt.ylabel("Best PSNR over iterations (dB)")
-plt.title("Influence of lambda for noise levels (IRCNN Denoising)")
-plt.grid(True, which="both", linestyle="--", alpha=0.5)
-plt.legend()
-plt.tight_layout()
-plt.show()
-'''
-
-
-
 # --- Fonction pour comparer perf ---
 
-def denoise_ircnnv2(
-    image_path,
-    model_dir=r"./IRCNN_v2/weights_ircnn_experts_colab",
-    out_dir=r"./benchmark/denoise",
-    noise_sigma=40,
-    sigma_n_pixels=2, # Bruit réel de l'image (estimé)
-    lambda_pnp=1,     # Paramètre de régularisation (à ajuster)
-    n_iter=15
-):
+def run_single(
+    clean_path:str,
+    ckpt_path:str = "./weights_ircnn",
+    out_dir:str = "./results_IRCNN/denoise_single",
+    sigma: float = 20.0,
+    seed: int = 0,
+) -> Dict[str, float]:
+    
     os.makedirs(out_dir, exist_ok=True)
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 1. Charger l'image et préparer le flou
-    img_pil = Image.open(image_path).convert("RGB")
+    img_pil = Image.open(clean_path).convert("RGB")
     clean = TF.to_tensor(img_pil).unsqueeze(0).to(device)
-
+    
+    manager = IRCNNModelManager(ckpt_path, device=device)
+    expert = manager.get_expert(sigma)
+    
     # Ajout du bruit
-    noise = torch.randn_like(clean) * (noise_sigma / 255.0)
-    y = (clean + noise).clamp(0, 1)
+    noisy = add_awgn(clean, sigma=sigma, seed=seed, device=device)
+    den = expert.denoise(noisy).clamp(0, 1)
+    noisy_clamped = noisy.clamp(0.0, 1.0)
+    
+    psnr_noisy = psnr_torch(noisy_clamped, clean)
+    psnr_den = psnr_torch(den, clean)
+    
+    ssim_noisy = ssim_torch(noisy_clamped, clean)
+    ssim_den = ssim_torch(den, clean)
 
-    # 2. Préparer les itérations (30 itérations de sigma=49 à sigma=sigma_n)
-    manager = IRCNNModelManager(model_dir, device=device)
-    sigmas_k = np.logspace(np.log10(49), np.log10(sigma_n_pixels), n_iter)
+    TF.to_pil_image(clean.squeeze(0)).save(os.path.join(out_dir, "clean.png"))
+    TF.to_pil_image(noisy_clamped.squeeze(0)).save(os.path.join(out_dir, f"noisy_sigma{int(sigma)}.png"))
+    TF.to_pil_image(den.squeeze(0)).save(os.path.join(out_dir, f"denoised_sigma{int(sigma)}.png"))
 
-    x = y.clone()
-    best_psnr = -float("inf")
-    best_x = x.clone()
-    best_mu = 0
-    mus=[]
-    psnr=[]
-    for i, sk in enumerate(sigmas_k):
-        # sigma_d = sk / 255.0
-        mu = lambda_pnp / (sk **2)
+    print("Saved to:", out_dir)
+    print(f"PSNR noisy   : {psnr_noisy:.2f} dB")
+    print(f"PSNR denoised: {psnr_den:.2f} dB")
+    print(f"SSIM noisy   : {ssim_noisy:.2f}")
+    print(f"SSIM denoised: {ssim_den:.2f}")
 
-        # Étape A : Fidélité (FFT)
-        x = solve_fidelity_denoise(y, x, mu)
-
-        # Étape B : Prior (Expert CNN)
-        expert = manager.get_expert(sk)
-        with torch.no_grad():
-            x = expert.denoise(x).clamp(0, 1)
-        mus.append(mu)
-        p = calculate_psnr(x, clean)
-        psnr.append(p)
-        if p > best_psnr:
-            best_psnr = p
-            best_x = x.clone()
-            best_mu = mu
-
-    # 3. Calcul des PSNR
-    psnr_noisy = calculate_psnr(y, clean)
-    improvement = best_psnr - psnr_noisy
-
-    # 4. Sauvegarde et résultats
-    img_id = os.path.splitext(os.path.basename(image_path))[0]
-    img_dir = os.path.join(out_dir, img_id)
-    os.makedirs(img_dir, exist_ok=True)
-    TF.to_pil_image(clean.squeeze(0)).save(os.path.join(img_dir, f"clean.png"))
-    TF.to_pil_image(y.squeeze(0)).save(os.path.join(img_dir, f"noisy.png"))
-    TF.to_pil_image(best_x.squeeze(0)).save(os.path.join(img_dir, f"denoised_ircnnv2.png"))
-    '''print(f"Terminé ! Images sauvegardées dans le dossier '{img_dir}'.")
-    plt.plot(mus,psnr,'o')
-    plt.show()'''
-    return best_psnr
+    return {"psnr_noisy": psnr_noisy, "psnr_denoised": psnr_den, "ssim_noisy": ssim_noisy, "ssim_denoised": ssim_den}
 
 
-'''print("Image choisie:", r"./BSDS300/images/test\123456.jpg")
-print(denoise_ircnnv2(image_path=image_path))'''
+'''image_path =  "./BSDS300/images/test/37073.jpg"
+print(run_single(clean_path=image_path))'''
+
+
+@torch.no_grad()
+def benchmark_ircnn(
+    test_dir: str,
+    ckpt_path: str,
+    out_dir: str,
+    sigma: float = 20.0,
+    n_images: int = 20,
+    seed: int = 0,
+    save_examples: bool = False,
+) -> pd.DataFrame:
+    """
+    Randomly sample n_images from test_dir, add AWGN, denoise, compute PSNR per image.
+    Saves CSV. Optionally saves clean/noisy/den for each image.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = IRCNNModelManager(ckpt_path, device=device)
+
+    all_paths = list_images(test_dir)
+    if len(all_paths) == 0:
+        raise RuntimeError(f"Aucune image trouvée dans {test_dir}")
+    if len(all_paths) < n_images:
+        raise RuntimeError(f"Pas assez d'images: {len(all_paths)} < {n_images}")
+
+    rng = random.Random(seed)
+    chosen = rng.sample(all_paths, n_images)
+
+    rows = []
+    for i, path in enumerate(chosen):
+        clean_pil = Image.open(path).convert("RGB")
+        clean = TF.to_tensor(clean_pil).unsqueeze(0)  # (1,3,H,W)
+
+        expert = model.get_expert(sigma)
+    
+        # Ajout du bruit
+        noisy = add_awgn(clean, sigma=sigma, seed=seed, device=device)
+        den = expert.denoise(noisy).clamp(0, 1)
+        noisy_clamped = noisy.clamp(0.0, 1.0)
+
+        psnr_noisy = psnr_torch(noisy_clamped, clean)
+        psnr_den = psnr_torch(den, clean)
+        
+        ssim_noisy = ssim_torch(noisy_clamped, clean)
+        ssim_den = ssim_torch(den, clean)
+
+        rows.append({
+            "idx": i,
+            "filename": os.path.basename(path),
+            "path": path,
+            "sigma": sigma,
+            "psnr_noisy_db": psnr_noisy,
+            "psnr_denoised_db": psnr_den,
+            "gain_db": psnr_den - psnr_noisy,
+            "ssim_noisy": ssim_noisy,
+            "ssim_denoised": ssim_den,
+            "gain_ssim": ssim_den - ssim_noisy,
+        })
+
+        if save_examples:
+            base = os.path.splitext(os.path.basename(path))[0]
+            TF.to_pil_image(clean.squeeze(0)).save(os.path.join(out_dir, f"{base}_clean.png"))
+            TF.to_pil_image(noisy_clamped.squeeze(0)).save(os.path.join(out_dir, f"{base}_noisy_sigma{int(sigma)}.png"))
+            TF.to_pil_image(den.squeeze(0)).save(os.path.join(out_dir, f"{base}_den_sigma{int(sigma)}.png"))
+
+    df = pd.DataFrame(rows)
+
+    mean_noisy_psnr = df["psnr_noisy_db"].mean()
+    mean_den_psnr = df["psnr_denoised_db"].mean()
+    mean_gain_psnr = df["gain_db"].mean()
+    
+    mean_noisy_ssim = df["ssim_noisy"].mean()
+    mean_den_ssim = df["ssim_denoised"].mean()
+    mean_gain_ssim = df["gain_ssim"].mean()
+
+    csv_path = os.path.join(out_dir, f"drunet_benchmark_{n_images}imgs_sigma{int(sigma)}_seed{seed}.csv")
+    df.to_csv(csv_path, index=False)
+
+    print("\n=== Résultats DRUNet (benchmark random) ===")
+    print(f"test_dir : {test_dir}")
+    print(f"ckpt     : {ckpt_path}")
+    print(f"sigma    : {sigma} (pixel)")
+    print(f"seed     : {seed}")
+    print(f"CSV saved: {csv_path}")
+
+    print("\nMoyennes:")
+    print(f"  PSNR noisy    : {mean_noisy_psnr:.2f} dB")
+    print(f"  PSNR denoised : {mean_den_psnr:.2f} dB")
+    print(f"  Gain PSNR         : {mean_gain_psnr:.2f} dB")
+    
+    print(f"  SSIM noisy    : {mean_noisy_ssim:.2f}")
+    print(f"  SSIM denoised : {mean_den_ssim:.2f}")
+    print(f"  Gain SSIM         : {mean_gain_ssim:.2f}")
+
+    show_cols = ["idx", "filename", "sigma", "psnr_noisy_db", "psnr_denoised_db", "gain_db", "ssim_noisy", "ssim_denoised", "gain_ssim"]
+    print("\nTableau (par image):")
+    print(df[show_cols].to_string(index=False, justify="left", float_format=lambda x: f"{x:0.2f}"))
+
+    return df
+
+
+if __name__ == "__main__":
+    # 1) One image (qualitative + PSNR + saves)
+    #run_single_image_demo(clean_path="./BSDS300/images/test/37073.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_single", sigma=70.0, seed=0)
+
+    # 2) Benchmark N images (table + CSV)
+    benchmark_ircnn(test_dir="./BSDS300/images/test", ckpt_path="./weights_ircnn", out_dir="./results_IRCNN/denoise_benchmark", sigma=20.0, n_images=10, seed=0, save_examples=False)
+

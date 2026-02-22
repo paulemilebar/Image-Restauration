@@ -102,7 +102,7 @@ class IRCNNFixed(nn.Module):
 
 
 class IRCNNModelManager:
-    """ Gère le chargement dynamique des 10 experts. """
+    """ Gère le chargement dynamique des 25 experts. """
     def __init__(self, model_dir, device="cpu"):
         self.model_dir = model_dir
         self.device = device
