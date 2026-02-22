@@ -1,172 +1,440 @@
-import os
+import os, math, random
+import pandas as pd
+from IRCNN_denoise import psnr_torch, ssim_torch, list_images
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 from PIL import Image
 import numpy as np
 import math
-from IRCNN import IRCNNModelManager
+from IRCNN_final import IRCNNModelManager
 import matplotlib.pyplot as plt
+from scipy.io import loadmat
 
-# --- Fonctions de dégradation ---
-def gaussian_psf(ksize=15, sigma=1.6, device='cpu'):
-    coords = torch.arange(ksize, device=device) - ksize // 2
-    g = torch.exp(-(coords**2)/(2*sigma**2))
-    g = g / g.sum()
-    psf = g[:, None] @ g[None, :]
-    psf = psf.unsqueeze(0).unsqueeze(0)
-    return psf
 
-def downsample(x, scale=2, mode='bilinear'):
-    if x.dim()==3:
-        x = x.unsqueeze(0)
-    H, W = x.shape[2], x.shape[3]
-    y = F.interpolate(x, size=(H//scale, W//scale), mode=mode, align_corners=False)
-    return y.squeeze(0) if x.dim()==3 else y
+def modcrop_tensor(x: torch.Tensor, sf: int) -> torch.Tensor:
+    _, _, H, W = x.shape
+    H2 = (H // sf) * sf
+    W2 = (W // sf) * sf
+    return x[..., :H2, :W2]
 
-def add_gaussian_noise(x, noise_sigma=5):
-    noise = torch.randn_like(x) * (noise_sigma/255.0)
-    return (x + noise).clamp(0,1)
+def save_img01(t: torch.Tensor, path: str):
+    TF.to_pil_image(t.squeeze(0).clamp(0, 1).cpu()).save(path)
 
-# --- Solve fidelity via Conjugate Gradient ---
-def solve_fidelity_cg(y, z, psf, mu, scale=2, n_iter_cg=10):
-    _, C, H, W = z.shape
-    ksize = psf.shape[-1]
-    pad = ksize // 2
+def load_kernel12(path="kernels/kernels_12.mat", k_index=0) -> np.ndarray:
+    k = loadmat(path)["kernels"][0, k_index]
+    k = np.asarray(k, dtype=np.float32)
+    k /= k.sum()
+    return k
 
-    # Opérateur H: blur + downsample
-    def H_op(x):
-        x_blur = F.conv2d(x, psf.expand(C,1,ksize,ksize), padding=pad, groups=C)
-        x_ds = F.interpolate(x_blur, scale_factor=1/scale, mode='bilinear', align_corners=False)
-        return x_ds
+# DPIR SISR closed-form (Eq. 14)
+def splits(a: torch.Tensor, sf: int) -> torch.Tensor:
+    # a: N x C x H x W -> N x C x (H/sf) x (W/sf) x (sf^2)
+    # sf: scale factor
+    b = torch.stack(torch.chunk(a, sf, dim=2), dim=4)
+    b = torch.cat(torch.chunk(b, sf, dim=3), dim=4)
+    return b
 
-    # Opérateur H^T: upsample + conv transpose
-    def HT_op(x):
-        x_up = F.interpolate(x, size=(H, W), mode='bilinear', align_corners=False)
-        psf_flip = torch.flip(psf, [2,3])
-        x_blur = F.conv2d(x_up, psf_flip.expand(C,1,ksize,ksize), padding=pad, groups=C)
-        return x_blur
+def p2o(psf: torch.Tensor, shape) -> torch.Tensor:
+    # psf: N x C x h x w (real)
+    otf = torch.zeros(psf.shape[:-2] + shape, dtype=psf.dtype, device=psf.device)
+    otf[..., :psf.shape[2], :psf.shape[3]].copy_(psf)
+    for axis, axis_size in enumerate(psf.shape[2:]):
+        otf = torch.roll(otf, -int(axis_size / 2), dims=axis + 2)
+    return torch.fft.fftn(otf, dim=(-2, -1))
 
-    def A(x):
-        return HT_op(H_op(x)) + mu * x
+def upsample_zeros(x: torch.Tensor, sf: int) -> torch.Tensor:
+    st = 0
+    z = torch.zeros((x.shape[0], x.shape[1], x.shape[2]*sf, x.shape[3]*sf),
+                    device=x.device, dtype=x.dtype)
+    z[..., st::sf, st::sf].copy_(x)
+    return z
 
-    y = y.unsqueeze(0) if y.dim()==3 else y
-    b = HT_op(y) + mu * z
+def downsample_decimate(x: torch.Tensor, sf: int) -> torch.Tensor:
+    st = 0
+    return x[..., st::sf, st::sf]
 
-    # CG initialization
-    x_cg = z.clone()
-    r = b - A(x_cg)
-    p = r.clone()
-    rsold = torch.sum(r*r)
+def pre_calculate(img_L: torch.Tensor, k: torch.Tensor, sf: int):
+    h, w = img_L.shape[-2:]
+    FB  = p2o(k, (h*sf, w*sf)) # FB = FFT(k) : blurring operatour B in Fourrier domain
+    FBC = torch.conj(FB)
+    F2B = torch.pow(torch.abs(FB), 2)
+    STy = upsample_zeros(img_L, sf=sf)
+    FBFy = FBC * torch.fft.fftn(STy, dim=(-2, -1))
+    return FB, FBC, F2B, FBFy
 
-    for i in range(n_iter_cg):
-        Ap = A(p)
-        alpha = rsold / (torch.sum(p*Ap) + 1e-8)
-        x_cg = x_cg + alpha * p
-        r = r - alpha * Ap
-        rsnew = torch.sum(r*r)
-        if torch.sqrt(rsnew) < 1e-6:
-            break
-        p = r + (rsnew/rsold)*p
-        rsold = rsnew
+def data_solution_closed_form(z_prev, FB, FBC, F2B, FBFy, alpha, sf):
+    """
+    closed-form x-step (Eq.14) as implemented in DPIR utils_sisr.data_solution
+    """
+    FR = FBFy + torch.fft.fftn(alpha * z_prev, dim=(-2, -1))
+    x1 = FB.mul(FR)
+    FBR = torch.mean(splits(x1, sf), dim=-1, keepdim=False)
+    invW = torch.mean(splits(F2B, sf), dim=-1, keepdim=False)
+    invWBR = FBR.div(invW + alpha)
+    FCBinvWBR = FBC * invWBR.repeat(1, 1, sf, sf)
+    FX = (FR - FCBinvWBR) / alpha
+    x_est = torch.real(torch.fft.ifftn(FX, dim=(-2, -1)))
+    return x_est
 
-    return x_cg
+def shift_pixel_torch(x: torch.Tensor, sf: int, upper_left: bool = True) -> torch.Tensor:
+    # shift = (sf-1)/2, bilinear grid interpolation (handles "upper-left" downsampler shift)
+    B, C, H, W = x.shape
+    shift = (sf - 1) * 0.5
+    if not upper_left:
+        shift = -shift
 
-# --- PSNR ---
-def calculate_psnr(x, y, eps=1e-8):
-    mse = torch.mean((x - y)**2).item()
-    return 10 * math.log10(1.0 / (mse + eps))
+    yy, xx = torch.meshgrid(
+        torch.arange(H, device=x.device, dtype=torch.float32),
+        torch.arange(W, device=x.device, dtype=torch.float32),
+        indexing="ij"
+    )
+    xx = (xx + shift).clamp(0, W - 1)
+    yy = (yy + shift).clamp(0, H - 1)
 
-# --- Fonction principale ---
-def test_deblur_pnp(
-    image_path,
-    model_dir=r"./IRCNN_v2/weights_ircnn_experts_colab",
-    out_dir=r"./IRCNN_v2/tests_super_resolution",
-    sigma_n_pixels=2,
-    lambda_pnp=3,
-    ksize=7,
-    n_iter=10,
-    blur_sigma=1.6,
-    scale=5,
-    noise_sigma=5
+    gx = (xx / (W - 1)) * 2 - 1
+    gy = (yy / (H - 1)) * 2 - 1
+    grid = torch.stack([gx, gy], dim=-1).unsqueeze(0)  # (1,H,W,2)
+
+    return F.grid_sample(x, grid, mode="bilinear", padding_mode="border", align_corners=True)
+
+def get_rho_sigma(noise_level_model: float, iter_num: int, modelSigma1: float, modelSigma2: float, w: float = 1.0):
+    # sigma schedule (pixel space): modelSigma1 -> modelSigma2 (log), then /255
+    sigmas = np.exp(np.linspace(np.log(modelSigma1), np.log(modelSigma2), iter_num)).astype(np.float32) / 255.0
+
+    # safeguard for "sigma=0" case
+    sigma = max(0.255/255.0, float(noise_level_model))
+
+    # rho schedule
+    rhos = (w * (sigma**2) / (sigmas**2 + 1e-12)).astype(np.float32)
+    return rhos, sigmas
+
+
+
+# Main DPIR SISR (minimal outputs + PSNR plot)
+@torch.no_grad()
+def run_one(
+    clean_path: str,
+    ckpt_path: str,
+    out_dir: str,
+    scale: int = 3,
+    sigma_img: float = 7.65,     # LR noise in pixel space (0..255)
+    iter_num: int = 24,
+    kernels_mat_path: str = "kernels/kernels_12.mat",
+    k_index: int = 2,           # choose 0..7
+    modelSigma1: float = 49.0,
+    seed: int = 0,
 ):
     os.makedirs(out_dir, exist_ok=True)
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Charger image HR
-    img_pil = Image.open(image_path).convert("RGB")
-    clean = TF.to_tensor(img_pil).unsqueeze(0).to(device)
-    _, C, H, W = clean.shape
+    # ---- load model ----
+    model = IRCNNModelManager(ckpt_path, device=device)
 
-    # Créer PSF
-    psf = gaussian_psf(ksize=ksize, sigma=blur_sigma, device=device)
+    # ---- load HR ----
+    x = TF.to_tensor(Image.open(clean_path).convert("RGB")).unsqueeze(0).to(device)
+    x = modcrop_tensor(x, scale)
+    B, C, H, W = x.shape
 
-    # Dégradée LR
-    y_blur = F.conv2d(clean, psf.expand(C,1,ksize,ksize), padding=ksize//2, groups=C)
-    y_lr = downsample(y_blur, scale=scale)
-    y = add_gaussian_noise(y_lr, noise_sigma=noise_sigma)
+    # ---- load paper kernel ----
+    if not os.path.isfile(kernels_mat_path):
+        raise FileNotFoundError(
+            f"Missing {kernels_mat_path}. Put kernels_12.mat in ./kernels/."
+        )
+    k_np = load_kernel12(kernels_mat_path, k_index=k_index)
+    k = torch.from_numpy(k_np.astype(np.float32)).to(device=device, dtype=x.dtype)
+    k = k.unsqueeze(0).unsqueeze(0).repeat(1, C, 1, 1)  # (1,3,kh,kw)
 
-    # Préparer sigmas
-    sigmas_k = np.logspace(np.log10(49), np.log10(sigma_n_pixels), n_iter)
-    manager = IRCNNModelManager(model_dir, device=device)
+    # ---- classical degradation: y = (x ⊗ k)↓s + n  with circular BC ----
+    FB = p2o(k, (H, W))  # complex OTF
+    xb = torch.real(torch.fft.ifftn(torch.fft.fftn(x, dim=(-2, -1)) * FB, dim=(-2, -1)))
+    y = downsample_decimate(xb, scale)
 
-    # Initialisation x0
-    x = F.interpolate(y, size=(H,W), mode='bicubic', align_corners=False)
-    psnr_degraded = calculate_psnr(x, clean)
+    sigma_n = float(sigma_img) / 255.0
+    if sigma_n > 0:
+        try:
+            g = torch.Generator(device=device).manual_seed(seed)
+            y = y + torch.randn_like(y, generator=g) * sigma_n
+        except TypeError:
+            torch.manual_seed(seed)
+            y = y + torch.randn_like(y) * sigma_n
 
-    best_psnr = -float("inf")
-    best_x = x.clone()
-    best_mu = 0
-    psnr_list = []
-    mu_list = []
+    # ---- save only the 3 images
+    save_img01(x, os.path.join(out_dir, "clean.png"))
+    save_img01(y, os.path.join(out_dir, "lr.png"))
 
-    print(f"Début du défloutage HQS ({n_iter} itérations)...")
-    for i, sk in enumerate(sigmas_k):
-        mu = lambda_pnp*scale**2 / (sk**2)
-        # Solve fidelity via CG
-        x = solve_fidelity_cg(y, x, psf, mu, scale=scale, n_iter_cg=10)
-        # Prior CNN
-        expert = manager.get_expert(sk)
-        with torch.no_grad():
-            x = expert.denoise(x).clamp(0,1)
+    # ---- DPIR params (K=24, sigma_K=max(sigma,s)) ----
+    noise_level_model = sigma_n
+    modelSigma2 = max(float(scale), float(noise_level_model * 255.0))
+    rhos, sigmas = get_rho_sigma(noise_level_model, iter_num, modelSigma1, modelSigma2, w=1.0)
+    rhos_t = torch.tensor(rhos, device=device, dtype=x.dtype)
+    sigmas_t = torch.tensor(sigmas, device=device, dtype=x.dtype)
 
-        # PSNR intermédiaire
-        p = calculate_psnr(x, clean)
-        psnr_list.append(p)
-        mu_list.append(mu)
-        if p > best_psnr:
-            best_psnr = p
-            best_x = x.clone()
-            best_mu = mu
+    # ---- pre-calc for Eq.(14) ----
+    FB2, FBC, F2B, FBFy = pre_calculate(y, k, scale)
 
-    improvement = best_psnr - psnr_degraded
-    print(f"PSNR Degraded : {psnr_degraded:.2f} dB")
-    print(f"PSNR Restored : {best_psnr:.2f} dB for mu = {best_mu:.2f}")
-    print(f"Gain         : {improvement:.2f} dB")
+    # ---- init z0 = bicubic(y) + shift correction ----
+    z = F.interpolate(y, scale_factor=scale, mode="bicubic", align_corners=False)
+    z = shift_pixel_torch(z, sf=scale, upper_left=True).clamp(0, 1)
+    save_img01(z, os.path.join(out_dir, "bicubic.png"))
 
-    # 4. Sauvegarde et résultats
-    img_id = os.path.splitext(os.path.basename(image_path))[0]
-    TF.to_pil_image(clean.squeeze(0)).save(os.path.join(out_dir, f"{img_id}_input_cleaned.png"))
-    TF.to_pil_image(y.squeeze(0)).save(os.path.join(out_dir, f"{img_id}_input_degraded.png"))
-    TF.to_pil_image(best_x.squeeze(0)).save(os.path.join(out_dir, f"{img_id}_output_restaured.png"))
-    print(f"Terminé ! Images sauvegardées dans le dossier '{out_dir}'.")
-    plt.plot(mu_list,psnr_list,'o')
-    plt.plot([0],[psnr_degraded], color='orange', marker='x')
-    plt.axvline(x=best_mu, color='red', linestyle='--', linewidth=2)
+    psnr_bic = psnr_torch(z.cpu(), x.cpu())
+    print(f"PSNR bicubic (z0): {psnr_bic:.2f} dB")
+    
+    ssim_bic = ssim_torch(z.cpu(), x.cpu())
+    print(f"SSIM bicubic (z0): {ssim_bic:.2f}")
+
+
+    # ---- iterations: x_k (closed-form) then z_k (IRCNN) ----
+    psnr_x = []
+    psnr_z = []
+    
+    ssim_x = []
+    ssim_z = []
+
+    for i in range(iter_num):
+        alpha = rhos_t[i].view(1, 1, 1, 1)
+
+        xk = data_solution_closed_form(z, FB2, FBC, F2B, FBFy, alpha, scale).clamp(0, 1)
+
+        sigma_i = float(sigmas_t[i].item())
+        expert = model.get_expert(255.0*sigma_i)
+        z = expert.denoise(xk).clamp(0, 1)
+        
+        psnr_x.append(psnr_torch(xk.cpu(), x.cpu()))
+        psnr_z.append(psnr_torch(z.cpu(),  x.cpu()))
+        ssim_x.append(ssim_torch(xk.cpu(), x.cpu()))
+        ssim_z.append(ssim_torch(z.cpu(),  x.cpu()))
+
+    # ---- save restored ----
+    save_img01(z, os.path.join(out_dir, "restored.png"))
+
+    print("Saved to:", out_dir)
+    print("Shapes HR / LR / Restored:", tuple(x.shape), tuple(y.shape), tuple(z.shape))
+    print(f"Final PSNR (z_K): {psnr_z[-1]:.2f} dB")
+    print(f"Final SSIM (z_K): {ssim_z[-1]:.2f}")
+
+    # ---- plot PSNR curves ----
+    it = np.arange(1, iter_num + 1)
+    plt.figure()
+    plt.plot(it, psnr_x, label="PSNR(x_k)  (data step)")
+    plt.plot(it, psnr_z, label="PSNR(z_k)  (after IRCNN)")
+    plt.xlabel("Iteration k")
+    plt.ylabel("PSNR (dB)")
+    plt.title(f"DPIR SISR PSNR curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "psnr_curves.png"), dpi=200)
+    plt.show()
+    
+    # ---- plot SSIM curves ----
+    it = np.arange(1, iter_num + 1)
+    plt.figure()
+    plt.plot(it, ssim_x, label="SSIM(x_k)  (data step)")
+    plt.plot(it, ssim_z, label="SSIM(z_k)  (after IRCNN)")
+    plt.xlabel("Iteration k")
+    plt.ylabel("SSIM")
+    plt.title(f"DPIR SISR SSIM curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "ssim_curves.png"), dpi=200)
     plt.show()
 
 
-import random
+'''run_one(
+    clean_path="./BSDS300/images/test/37073.jpg",
+    ckpt_path="./weights_ircnn",
+    out_dir="results_IRCNN/SISR_single",
+    scale=2,
+    sigma_img=0,
+    iter_num=24,
+)'''
 
-# Choix aléatoire de l'image test
-IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff")
-clean_dir = r"./BSDS300/images/test" 
-paths = [
-            os.path.join(clean_dir, f) for f in os.listdir(clean_dir)
-            if f.lower().endswith(IMG_EXT)
-        ]
 
-assert len(paths) > 0, f"Aucune image trouvée dans {clean_dir}"
-image_path = random.choice(paths)
-print("Image choisie:", image_path)
-print(test_deblur_pnp(image_path=image_path))
+@torch.no_grad()
+def run_one_metrics_sisr(
+    clean_path: str,
+    model: torch.nn.Module,
+    device: torch.device,
+    out_dir: str | None,
+    scale: int = 2,
+    sigma_img: float = 0.0,
+    iter_num: int = 24,
+    kernels_mat_path: str = "kernels/kernels_12.mat",
+    k_index: int = 2,
+    modelSigma1: float = 49.0,
+    seed: int = 0,
+    save_images: bool = False,
+):
+    """
+    Même pipeline que run_one, mais:
+      - ne charge pas le modèle (on le réutilise)
+      - retourne PSNR bicubic et PSNR final (z_K)
+      - sauvegarde optionnellement clean/lr/bicubic/restored
+    """
+    if out_dir is not None:
+        os.makedirs(out_dir, exist_ok=True)
+
+    # ---- load HR ----
+    x = TF.to_tensor(Image.open(clean_path).convert("RGB")).unsqueeze(0).to(device)
+    x = modcrop_tensor(x, scale)
+    B, C, H, W = x.shape
+
+    # ---- load kernel ----
+    if not os.path.isfile(kernels_mat_path):
+        raise FileNotFoundError(f"Missing {kernels_mat_path}. Put kernels_12.mat in ./kernels/.")
+    k_np = load_kernel12(kernels_mat_path, k_index=k_index)
+    k = torch.from_numpy(k_np.astype(np.float32)).to(device=device, dtype=x.dtype)
+    k = k.unsqueeze(0).unsqueeze(0).repeat(1, C, 1, 1)  # (1,3,kh,kw)
+
+    # ---- degradation: y = (x ⊗ k)↓s + n ----
+    FB = p2o(k, (H, W))
+    xb = torch.real(torch.fft.ifftn(torch.fft.fftn(x, dim=(-2, -1)) * FB, dim=(-2, -1)))
+    y = downsample_decimate(xb, scale)
+
+    sigma_n = float(sigma_img) / 255.0
+    if sigma_n > 0:
+        try:
+            g = torch.Generator(device=device).manual_seed(seed)
+            y = y + torch.randn_like(y, generator=g) * sigma_n
+        except TypeError:
+            torch.manual_seed(seed)
+            y = y + torch.randn_like(y) * sigma_n
+
+    # ---- init z0 = bicubic + shift ----
+    z = F.interpolate(y, scale_factor=scale, mode="bicubic", align_corners=False)
+    z = shift_pixel_torch(z, sf=scale, upper_left=True).clamp(0, 1)
+
+    psnr_bic = psnr_torch(z.detach().cpu(), x.detach().cpu())
+    ssim_bic = ssim_torch(z.detach().cpu(), x.detach().cpu())
+
+    # ---- DPIR params ----
+    noise_level_model = sigma_n
+    modelSigma2 = max(float(scale), float(noise_level_model * 255.0))
+    rhos, sigmas = get_rho_sigma(noise_level_model, iter_num, modelSigma1, modelSigma2, w=1.0)
+    rhos_t = torch.tensor(rhos, device=device, dtype=x.dtype)
+    sigmas_t = torch.tensor(sigmas, device=device, dtype=x.dtype)
+
+    # ---- pre-calc ----
+    FB2, FBC, F2B, FBFy = pre_calculate(y, k, scale)
+
+    # ---- iterations ----
+    for i in range(iter_num):
+        alpha = rhos_t[i].view(1, 1, 1, 1)
+        xk = data_solution_closed_form(z, FB2, FBC, F2B, FBFy, alpha, scale).clamp(0, 1)
+
+        sigma_i = float(sigmas_t[i].item())
+        
+        expert = model.get_expert(255.0*sigma_i)
+        z = expert.denoise(xk).clamp(0, 1)
+        
+    psnr_final = psnr_torch(z.detach().cpu(), x.detach().cpu())
+    ssim_final = ssim_torch(z.detach().cpu(), x.detach().cpu())
+
+    # ---- optional save ----
+    if save_images and out_dir is not None:
+        base = os.path.splitext(os.path.basename(clean_path))[0]
+        save_img01(x, os.path.join(out_dir, f"{base}_clean.png"))
+        save_img01(y, os.path.join(out_dir, f"{base}_lr.png"))
+        save_img01(F.interpolate(y, scale_factor=scale, mode="bicubic", align_corners=False).clamp(0,1),
+                   os.path.join(out_dir, f"{base}_lr_bicubic_upsampled.png"))
+        save_img01(z, os.path.join(out_dir, f"{base}_restored.png"))
+
+    return {
+        "filename": os.path.basename(clean_path),
+        "path": clean_path,
+        "scale": int(scale),
+        "sigma_img": float(sigma_img),
+        "k_index": int(k_index),
+        "iter_num": int(iter_num),
+        "psnr_bicubic_db": float(psnr_bic),
+        "psnr_restored_db": float(psnr_final),
+        "gain_db": float(psnr_final - psnr_bic),
+        "ssim_bicubic": float(ssim_bic),
+        "ssim_restored": float(ssim_final),
+        "ssim_gain": float(ssim_final - ssim_bic),
+    }
+
+
+@torch.no_grad()
+def benchmark_sisr_10_random_to_csv(
+    test_dir: str,
+    ckpt_path: str,
+    out_dir: str,
+    n_images: int = 10,
+    seed: int = 0,
+    scale: int = 2,
+    sigma_img: float = 0.0,
+    iter_num: int = 24,
+    kernels_mat_path: str = "kernels/kernels_12.mat",
+    k_index: int = 2,
+    modelSigma1: float = 49.0,
+    save_examples: bool = False,
+):
+    """
+    Pick 10 random test images, run DPIR-SISR, write CSV and print means.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # load model once
+    model = IRCNNModelManager(ckpt_path, device=device)
+
+    all_paths = list_images(test_dir)
+    if len(all_paths) < n_images:
+        raise RuntimeError(f"Pas assez d'images dans {test_dir}: {len(all_paths)} < {n_images}")
+
+    rng = random.Random(seed)
+    chosen = rng.sample(all_paths, n_images)
+
+    rows = []
+    for i, p in enumerate(chosen):
+        row = run_one_metrics_sisr(
+            clean_path=p,
+            model=model,
+            device=device,
+            out_dir=out_dir,
+            scale=scale,
+            sigma_img=sigma_img,
+            iter_num=iter_num,
+            kernels_mat_path=kernels_mat_path,
+            k_index=k_index,
+            modelSigma1=modelSigma1,
+            seed=seed + i,
+            save_images=save_examples,
+        )
+        rows.append(row)
+        print(f"[{i+1}/{n_images}] {row['filename']} | bic {row['psnr_bicubic_db']:.2f} -> restored {row['psnr_restored_db']:.2f} dB")
+        print(f"[{i+1}/{n_images}] {row['filename']} | bic {row['ssim_bicubic']:.2f} -> restored {row['ssim_restored']:.2f}")
+    
+    df = pd.DataFrame(rows)
+    csv_path = os.path.join(out_dir, f"sisr_benchmark_{n_images}imgs_sf{scale}_sig{sigma_img}_k{k_index}_K{iter_num}_seed{seed}.csv")
+    df.to_csv(csv_path, index=False)
+
+    print("\n=== Moyennes (DPIR SISR) ===")
+    print(f"PSNR bicubic  : {df['psnr_bicubic_db'].mean():.2f} dB")
+    print(f"PSNR restored : {df['psnr_restored_db'].mean():.2f} dB")
+    print(f"Gain          : {df['gain_db'].mean():.2f} dB")
+    print(f"SSIM bicubic  : {df['ssim_bicubic'].mean():.2f} dB")
+    print(f"SSIM restored : {df['ssim_restored'].mean():.2f} dB")
+    print(f"Gain  SSIM        : {df['ssim_gain'].mean():.2f} dB")
+    print("CSV saved:", csv_path)
+
+    return df, csv_path
+
+if __name__ == "__main__":
+    benchmark_sisr_10_random_to_csv(
+        test_dir="./BSDS300/images/test",
+        ckpt_path="./weights_ircnn",
+        out_dir="./results_IRCNN/SISR_benchmark",
+        n_images=10,
+        seed=0,
+        scale=2,
+        sigma_img=0,
+        iter_num=24,
+        kernels_mat_path="kernels/kernels_12.mat",
+        k_index=2,
+        save_examples=False,
+    )

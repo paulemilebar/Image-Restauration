@@ -166,10 +166,10 @@ def benchmark_ircnn(
     mean_den_ssim = df["ssim_denoised"].mean()
     mean_gain_ssim = df["gain_ssim"].mean()
 
-    csv_path = os.path.join(out_dir, f"drunet_benchmark_{n_images}imgs_sigma{int(sigma)}_seed{seed}.csv")
+    csv_path = os.path.join(out_dir, f"ircnn_benchmark_{n_images}imgs_sigma{int(sigma)}_seed{seed}.csv")
     df.to_csv(csv_path, index=False)
 
-    print("\n=== Résultats DRUNet (benchmark random) ===")
+    print("\n=== Résultats IRCNN (benchmark random) ===")
     print(f"test_dir : {test_dir}")
     print(f"ckpt     : {ckpt_path}")
     print(f"sigma    : {sigma} (pixel)")
@@ -193,9 +193,5 @@ def benchmark_ircnn(
 
 
 if __name__ == "__main__":
-    # 1) One image (qualitative + PSNR + saves)
-    #run_single_image_demo(clean_path="./BSDS300/images/test/37073.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_single", sigma=70.0, seed=0)
-
-    # 2) Benchmark N images (table + CSV)
     benchmark_ircnn(test_dir="./BSDS300/images/test", ckpt_path="./weights_ircnn", out_dir="./results_IRCNN/denoise_benchmark", sigma=20.0, n_images=10, seed=0, save_examples=False)
 

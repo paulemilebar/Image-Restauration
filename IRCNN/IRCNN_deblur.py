@@ -43,7 +43,7 @@ def circ_conv_fft(x: torch.Tensor, otf: torch.Tensor) -> torch.Tensor:
 def dpir_hqs_deblur(
     y: torch.Tensor,                 # (B,3,H,W) in [0,1]
     otf: torch.Tensor,               # (H,W) complex
-    manager: torch.nn.Module,       # DRUNetSigmaMap
+    manager: torch.nn.Module,
     sigma_img: float,                # noise std in pixel space (0..255), e.g. 2.55
     lam: float = 0.23,
     n_iter: int = 8,
@@ -329,17 +329,6 @@ def benchmark_dpir_deblur_to_csv(
     return df, csv_path
 
 if __name__ == "__main__":
-  #  test_deblurring_dpir_with_levin09(
-   #      clean_path="./BSDS300/images/test/37073.jpg",
-   #      ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-   #      levin09_path="kernels/Levin09.npy",
-   #      kernel_index=0,
-    #     sigma_img=2.55,
-    #     n_iter=8,
-   #      lam=0.23,
-   #      out_dir="results_DRUNET/results_DRUNET_deblur",
- #)
-
     benchmark_dpir_deblur_to_csv(
         test_dir="./BSDS300/images/test",
         ckpt_path="./weights_ircnn",
@@ -353,106 +342,3 @@ if __name__ == "__main__":
         out_dir="./results_IRCNN/deblur_benchmark",
         save_examples=False,
     )
-    
-
-'''def deblur_ircnnv2_vf(
-    image_path,
-    model_dir=r"./IRCNN_v2/weights_ircnn_experts_colab",
-    out_dir=r"./benchmark/deblur/ircnnv2",
-    levin09_path=r"./kernels/Levin09.npy",
-    kernel_index=0,
-    lambda_pnp=3,
-    n_iter=15,
-    noise_sigma=5,
-    seed=0,
-    conv_threshold=1
-):
-    os.makedirs(out_dir, exist_ok=True)
-    device = torch.device("cpu")
-
-    # 1. Charger l'image et préparer le flou
-    img_pil = Image.open(image_path).convert("RGB")
-    clean = TF.to_tensor(img_pil).unsqueeze(0).to(device)
-    _, _, H, W = clean.shape
-    
-    # ----- load kernel Levin09 -----
-    k_np = load_levin09_kernel(levin09_path, kernel_index)
-    k = torch.from_numpy(k_np).to(device)
-
-    # ----- blur (circular) + add Gaussian noise -----
-    otf = psf_to_otf(k, (H, W))
-    blurry = circ_conv_fft(clean, otf)
-
-    sigma_n = noise_sigma / 255.0
-    try:
-        g = torch.Generator(device=device).manual_seed(seed)
-        noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype, generator=g) * sigma_n
-    except TypeError:
-        torch.manual_seed(seed)
-        noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype) * sigma_n
-
-    y = (blurry + noise).clamp(0.0, 1.0)
-
-    # 2. Préparer les itérations (30 itérations de sigma=49 à sigma=sigma_n)
-    manager = IRCNNModelManager(model_dir, device=device)
-    sigmas_k = np.logspace(np.log10(49), np.log10(noise_sigma), n_iter)
-
-    # 3. Calcul des PSNR
-    psnr_degraded = calculate_psnr(y, clean)
-    
-    x = y.clone()
-    best_psnr = -float("inf")
-    best_x = x.clone()
-    best_mu = 0
-    mus=[]
-    psnr1, psnr2=[], []
-    x1, x2=[], []
-    conv = False
-    
-    #print(f"Début du défloutage HQS ({n_iter} itérations)...")
-    for i, sk in enumerate(sigmas_k):
-        #sigma_d = sk / 255.0
-        mu = lambda_pnp / (sk**2)
-
-        # Étape A : Fidélité (FFT)
-        x = solve_fidelity_fft(y, x, k, mu)
-        p1 = calculate_psnr(x, clean)
-        psnr1.append(p1)
-        x1.append(x.clone())
-        # Étape B : Prior (Expert CNN)
-        expert = manager.get_expert(sk)
-        with torch.no_grad():
-            x = expert.denoise(x).clamp(0, 1)
-        mus.append(mu)
-        p2 = calculate_psnr(x, clean)
-        psnr2.append(p2)
-        x2.append(x.clone())
-        if abs(p2-p1)<conv_threshold and max(p1,p2)>best_psnr:
-            best_psnr = max(p1,p2)
-            best_x = x.clone()
-            best_mu = mu
-            conv = True
-
-    if not conv:
-        idx_max1, val_max1 = max(enumerate(psnr1), key=lambda x: x[1])
-        idx_max2, val_max2 = max(enumerate(psnr2), key=lambda x: x[1])
-        if val_max1>val_max2:
-            best_psnr=val_max1
-            best_x=x1[idx_max1]
-        else:
-            best_psnr=val_max2
-            best_x=x2[idx_max2]
-            
-    # 4. Sauvegarde et résultats
-    img_id = os.path.splitext(os.path.basename(image_path))[0]
-    img_dir = os.path.join(out_dir, img_id)
-    os.makedirs(img_dir, exist_ok=True)
-    TF.to_pil_image(clean.squeeze(0)).save(os.path.join(img_dir, f"clean.png"))
-    TF.to_pil_image(y.squeeze(0)).save(os.path.join(img_dir, f"degraded.png"))
-    TF.to_pil_image(best_x.squeeze(0)).save(os.path.join(img_dir, f"deblurred_ircnnv2.png"))
-    
-    return best_psnr
-
-image_path = r"./BSDS300/images/test\37073.jpg"
-print("Image choisie:", image_path)
-print(deblur_ircnnv2_vf(image_path=image_path))'''
