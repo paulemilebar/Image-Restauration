@@ -66,6 +66,7 @@ def dpir_hqs_deblur(
 
     for k in range(n_iter):
         sigma_d = float(sigmas_d[k])
+        # print(sigma_d)
         sigma_d_n = sigma_d / 255.0
 
         # mu = lambda / sigma_d^2
@@ -161,7 +162,7 @@ def test_deblurring_dpir_with_levin09(
     print(f"SSIM restored    : {ssim_rec:.2f}")
     
 
-'''test_deblurring_dpir_with_levin09(
+test_deblurring_dpir_with_levin09(
     clean_path="./BSDS300/images/test/37073.jpg",
     ckpt_path="./weights_ircnn",
     levin09_path="kernels/Levin09.npy",
@@ -170,7 +171,7 @@ def test_deblurring_dpir_with_levin09(
     n_iter=8,
     lam=0.23,
     out_dir="./results_IRCNN/deblur_single",
- )'''
+ )
  
  
 @torch.no_grad()
