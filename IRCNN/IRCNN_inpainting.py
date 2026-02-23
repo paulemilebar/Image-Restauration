@@ -17,7 +17,7 @@ import pandas as pd
 def l2norm_flat(x: torch.Tensor) -> torch.Tensor:
     return torch.norm(x.reshape(-1), p=2)
 
-def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "drunet"):
+def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "ircnn"):
     """
     metrics:
       psnr_x:   list length K
@@ -193,12 +193,14 @@ def dpir_hqs_inpaint(
 
     for k in range(iter_num):
         sigma_k = sigmas[k]
-        print(f"sigma:{sigma_k}")
-        mu = lambda_pnp/ (sigma_k**2)
-
+        #print(f"sigma:{sigma_k}")
+        mu = lambda_pnp/ ((255.0*sigma_k)**2)
+        # mu = rhos_t[k].view(1, 1, 1, 1)
         # x-step (fermé pixelwise)
-        xk = (M3 * y + mu * z) / (M3 + mu)
+        xk = M3 * ((y + mu * z) / (1.0 + mu)) + (1.0 - M3) * z
         xk = xk.clamp(0, 1)
+        #xk = (M3 * y + mu * z) / (M3 + mu)
+        #xk = xk.clamp(0, 1)
 
         # PSNR(x_k) and SSIM
         if track_convergence and (gt is not None):
@@ -210,7 +212,7 @@ def dpir_hqs_inpaint(
         z = expert.denoise(xk).clamp(0, 1)
 
         # enforce known pixels
-        z = (M3 * y + (1.0 - M3) * z).clamp(0, 1)
+        #z = (M3 * y + (1.0 - M3) * z).clamp(0, 1)
 
         # ||x_{k+1}-x_k|| / ||x0|| + somme cumulée
         if track_convergence:
@@ -394,14 +396,14 @@ def run_compare_return_metrics(
         "shepard_window": int(shepard_window),
         "psnr_input": psnr_torch(y, gt),
         "psnr_shepard": psnr_torch(rec_sh, gt),
-        "psnr_dpir_drunet": psnr_torch(rec_d, gt),
+        "psnr_dpir_ircnn": psnr_torch(rec_d, gt),
         "ssim_input": ssim_torch(y, gt),
         "ssim_shepard": ssim_torch(rec_sh, gt),
-        "ssim_dpir_drunet": ssim_torch(rec_d, gt),
+        "ssim_dpir_ircnn": ssim_torch(rec_d, gt),
         "psnr_miss_input": psnr_on_missing(y, gt, miss),
         "psnr_miss_shepard": psnr_on_missing(rec_sh, gt, miss),
-        "psnr_miss_dpir_drunet": psnr_on_missing(rec_d, gt, miss),
-        "time_drunet_s": t_d,
+        "psnr_miss_dpir_ircnn": psnr_on_missing(rec_d, gt, miss),
+        "time_ircnn_s": t_d,
     }
 
     if save_outputs:
@@ -409,10 +411,10 @@ def run_compare_return_metrics(
         save_img01(M3, os.path.join(out_dir, "mask.png"))
         save_img01(y,  os.path.join(out_dir, "masked_noisy.png"))
         save_img01(rec_sh, os.path.join(out_dir, "restored_shepard_only.png"))
-        save_img01(rec_d,  os.path.join(out_dir, "restored_dpir_hqs_drunet.png"))
+        save_img01(rec_d,  os.path.join(out_dir, "restored_dpir_hqs_ircnn.png"))
 
         if save_convergence and (metrics_d is not None):
-            save_convergence_plots(metrics_d, out_dir=out_dir, prefix="drunet")
+            save_convergence_plots(metrics_d, out_dir=out_dir, prefix="ircnn")
 
     return res
 
@@ -482,7 +484,7 @@ def run_pool_10_images(
     return df2
 
 
-run_compare(
+'''run_compare(
     clean_path="./BSDS300/images/test/37073.jpg",
     out_dir="./results_IRCNN/inpainting_single",
     ckpt_path="./weights_ircnn",
@@ -493,10 +495,10 @@ run_compare(
     modelSigma2_pix=2.55,   
     shepard_window=11,
     shepard_p=2.0,
-)
+)'''
     
     
-'''df = run_pool_10_images(
+df = run_pool_10_images(
         clean_dir=r"./BSDS300/images/test",
         out_root="./results_IRCNN/inpainting_benchmark",
         ckpt_path="./weights_ircnn",
@@ -510,6 +512,6 @@ run_compare(
         shepard_p=2.0,
         save_outputs_per_image=False,
         save_convergence=False,
-        csv_name="pool10_metrics.csv"
-    )'''
-    
+        csv_name="pool10_metrics_v2.csv"
+)
+

@@ -41,10 +41,10 @@ def circ_conv_fft(x: torch.Tensor, otf: torch.Tensor) -> torch.Tensor:
 
 @torch.no_grad()
 def dpir_hqs_deblur(
-    y: torch.Tensor,                 # (B,3,H,W) in [0,1]
-    otf: torch.Tensor,               # (H,W) complex
+    y: torch.Tensor,
+    otf: torch.Tensor,
     manager: torch.nn.Module,
-    sigma_img: float,                # noise std in pixel space (0..255), e.g. 2.55
+    sigma_img: float,
     lam: float = 0.23,
     n_iter: int = 8,
     sigma_max: float = 49.0,
@@ -82,7 +82,8 @@ def dpir_hqs_deblur(
 
         # z-step = denoise(x, sigma_d)
         expert = manager.get_expert(sigma_d)
-        z = expert.denoise(x).clamp(0, 1)
+        z = expert.denoise(x)
+        #z = z.clamp(0, 1)
 
     return z
 
@@ -328,17 +329,17 @@ def benchmark_dpir_deblur_to_csv(
 
     return df, csv_path
 
-if __name__ == "__main__":
+'''if __name__ == "__main__":
     benchmark_dpir_deblur_to_csv(
         test_dir="./BSDS300/images/test",
         ckpt_path="./weights_ircnn",
         levin09_path="kernels/Levin09.npy",
         kernel_index=0,
         sigma_img=2.55,
-        n_iter=8,
+        n_iter=30,
         lam=0.23,
         n_images=10,
         seed=0,
-        out_dir="./results_IRCNN/deblur_benchmark",
+        out_dir="./results_IRCNN/deblur_benchmark_v2",
         save_examples=False,
-    )
+    )'''

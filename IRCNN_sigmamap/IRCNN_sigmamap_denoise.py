@@ -13,10 +13,6 @@ def psnr_torch(x, y, eps=1e-8):
     return 10.0 * math.log10(1.0 / (mse + eps))
 
 def ssim_torch(x, y, data_range=1.0):
-    """
-    x,y: tensors float, shape (1,3,H,W), values in [0,1]
-    return: float in [0,1] (en pratique), higher is better
-    """
     return float(ssim_fn(x, y, data_range=data_range).item())
 
 def list_images(folder: str, exts=(".png", ".jpg", ".jpeg")) -> List[str]:
@@ -35,22 +31,14 @@ def load_ircnn(ckpt_path: str, device: Optional[torch.device] = None) -> Tuple[t
     model.load_state_dict(state["model"], strict=True)
     return model, device
 
-def ircnn_infer(model: torch.nn.Module, inp: torch.Tensor, modulo: int = 8) -> torch.Tensor:
-    b, c, h, w = inp.shape
-    pad_h = (modulo - h % modulo) % modulo
-    pad_w = (modulo - w % modulo) % modulo
-    if pad_h or pad_w:
-        inp2 = F.pad(inp, (0, pad_w, 0, pad_h), mode="reflect")
-        out = model(inp2)
-        return out[..., :h, :w]
+def ircnn_infer(model: torch.nn.Module, inp: torch.Tensor) -> torch.Tensor:
     return model(inp)
 
 @torch.no_grad()
-def denoise_noisy_tensor(model: torch.nn.Module, noisy01: torch.Tensor, sigma: float, device: torch.device,
-                         modulo: int = 8) -> torch.Tensor:
+def denoise_noisy_tensor(model: torch.nn.Module, noisy01: torch.Tensor, sigma: float, device: torch.device) -> torch.Tensor:
     """
-    Denoise a *tensor* already noisy.
-    noisy01: (1,3,H,W) (not necessarily clamped)
+    Denoise a tensor already noisy.
+    noisy01: (1,3,H,W)
     returns: (1,3,H,W) clamped to [0,1]
     """
     assert noisy01.ndim == 4 and noisy01.shape[1] == 3, "noisy01 must be (1,3,H,W)"
@@ -58,7 +46,7 @@ def denoise_noisy_tensor(model: torch.nn.Module, noisy01: torch.Tensor, sigma: f
     sigma01 = sigma / 255.0
     sigma_map = torch.full((1, 1, H, W), sigma01, device=noisy01.device, dtype=noisy01.dtype)
     inp = torch.cat([noisy01, sigma_map], dim=1).to(device)
-    den = ircnn_infer(model, inp, modulo=modulo).clamp(0.0, 1.0)
+    den = ircnn_infer(model, inp).clamp(0.0, 1.0)
     return den
     
     
@@ -82,8 +70,7 @@ def run_single_image_demo(
     ckpt_path: str = r"./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
     out_dir: str = r"./results_IRCNN_sigmamap/denoise_single",
     sigma: float = 50,
-    seed: int = 0,
-    modulo: int = 8
+    seed: int = 0
 ) -> Dict[str, float]:
     os.makedirs(out_dir, exist_ok=True)
     model, device = load_ircnn(ckpt_path)
@@ -92,7 +79,7 @@ def run_single_image_demo(
     clean = TF.to_tensor(clean_pil).unsqueeze(0)
 
     noisy = add_awgn(clean, sigma=sigma, seed=seed, device=device)
-    den = denoise_noisy_tensor(model, noisy, sigma=sigma, device=device, modulo=modulo).cpu()
+    den = denoise_noisy_tensor(model, noisy, sigma=sigma, device=device).cpu()
 
     noisy_clamped = noisy.cpu().clamp(0.0, 1.0)
     psnr_noisy = psnr_torch(noisy_clamped, clean)
@@ -114,12 +101,12 @@ def run_single_image_demo(
     return {"psnr_noisy": psnr_noisy, "psnr_denoised": psnr_den, "ssim_noisy": ssim_noisy, "ssim_denoised": ssim_den}
 
 
-'''
-denoise_ircnn(
+
+'''run_single_image_demo(
     clean_path=r"./BSDS300/images/test/37073.jpg",
     sigma=50
-)
-'''
+)'''
+
 
 @torch.no_grad()
 def benchmark_ircnn_sigmap(
@@ -129,8 +116,7 @@ def benchmark_ircnn_sigmap(
     sigma: float = 20.0,
     n_images: int = 10,
     seed: int = 0,
-    modulo: int = 8,
-    save_examples: bool = False,
+    save_examples: bool = False
 ) -> pd.DataFrame:
     """
     Randomly sample n_images from test_dir, add AWGN, denoise, compute PSNR per image.
@@ -154,7 +140,7 @@ def benchmark_ircnn_sigmap(
         clean = TF.to_tensor(clean_pil).unsqueeze(0)  # (1,3,H,W)
 
         noisy = add_awgn(clean, sigma=sigma, seed=seed + i, device=device)  # NO CLAMP
-        den = denoise_noisy_tensor(model, noisy, sigma=sigma, device=device, modulo=modulo).cpu()
+        den = denoise_noisy_tensor(model, noisy, sigma=sigma, device=device).cpu()
 
         noisy_clamped = noisy.cpu().clamp(0.0, 1.0)
         psnr_noisy = psnr_torch(noisy_clamped, clean)
@@ -192,10 +178,10 @@ def benchmark_ircnn_sigmap(
     mean_den_ssim = df["ssim_denoised"].mean()
     mean_gain_ssim = df["gain_ssim"].mean()
 
-    csv_path = os.path.join(out_dir, f"drunet_benchmark_{n_images}imgs_sigma{int(sigma)}_seed{seed}.csv")
+    csv_path = os.path.join(out_dir, f"ircnn_benchmark_{n_images}imgs_sigma{int(sigma)}_seed{seed}.csv")
     df.to_csv(csv_path, index=False)
 
-    print("\n=== Résultats DRUNet (benchmark random) ===")
+    print("\n=== Résultats IRCNN (benchmark random) ===")
     print(f"test_dir : {test_dir}")
     print(f"ckpt     : {ckpt_path}")
     print(f"sigma    : {sigma} (pixel)")
@@ -219,9 +205,5 @@ def benchmark_ircnn_sigmap(
 
 
 if __name__ == "__main__":
-    # 1) One image (qualitative + PSNR + saves)
-    #run_single_image_demo(clean_path="./BSDS300/images/test/37073.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_single", sigma=70.0, seed=0)
-
-    # 2) Benchmark N images (table + CSV)
     benchmark_ircnn_sigmap(test_dir="./BSDS300/images/test", ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth", out_dir="results_IRCNN_sigmamap/denoise_benchmark", sigma=20.0, n_images=10, seed=0, save_examples=False)
 

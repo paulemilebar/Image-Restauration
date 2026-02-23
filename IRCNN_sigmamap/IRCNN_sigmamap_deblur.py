@@ -16,7 +16,6 @@ def load_levin09_kernel(npy_path: str = "kernels/Levin09.npy", kernel_index: int
     k /= s
     return k
 
-# FFT circular convolution 
 def psf_to_otf(psf: torch.Tensor, out_hw: tuple[int, int]) -> torch.Tensor:
     H, W = out_hw
     kh, kw = psf.shape
@@ -32,10 +31,10 @@ def circ_conv_fft(x: torch.Tensor, otf: torch.Tensor) -> torch.Tensor:
 
 @torch.no_grad()
 def dpir_hqs_deblur(
-    y: torch.Tensor,                 # (B,3,H,W) in [0,1]
-    otf: torch.Tensor,               # (H,W) complex
-    denoiser: torch.nn.Module,       # IRCNNSigmaMap
-    sigma_img: float,                # noise std in pixel space (0..255), e.g. 2.55
+    y: torch.Tensor,
+    otf: torch.Tensor,
+    denoiser: torch.nn.Module,
+    sigma_img: float,
     lam: float = 0.23,
     n_iter: int = 8,
     sigma_max: float = 49.0,
@@ -51,7 +50,7 @@ def dpir_hqs_deblur(
 
     Y = torch.fft.fft2(y, dim=(-2, -1))
     Hc = torch.conj(otf)
-    H2 = (otf.real ** 2 + otf.imag ** 2)  # |H|^2 reel
+    H2 = (otf.real ** 2 + otf.imag ** 2)
 
     z = y.clone()
 
@@ -59,12 +58,10 @@ def dpir_hqs_deblur(
         sigma_d = float(sigmas_d[k])
         sigma_d_n = sigma_d / 255.0
 
-        # mu = lambda / sigma_d^2
         mu = lam / (sigma_d_n ** 2)
-
-        # alpha = mu * sigma_img^2 (matches paper scaling in x-step)
         alpha = mu * (sigma_img_n ** 2)
 
+        # x-step
         Z = torch.fft.fft2(z, dim=(-2, -1))
         denom = (H2 + alpha).to(torch.complex64)
         numer = Hc[None, None, :, :] * Y + alpha * Z
@@ -84,7 +81,6 @@ print("Image choisie:", clean_path)
 deblur_ircnn_vf(clean_path=clean_path)'''
 
 
-# Main test function for : blur + noise, then DPIR deblur
 @torch.no_grad()
 def test_deblurring_dpir_with_levin09(
     clean_path: str,
@@ -121,32 +117,23 @@ def test_deblurring_dpir_with_levin09(
     sigma_n = sigma_img / 255.0
     g = torch.Generator(device=device).manual_seed(seed)
     noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype, generator=g) * sigma_n
-    #except TypeError:
-        # fallback si generator n'est pas supporté
-     #   torch.manual_seed(seed)
-      #  noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype) * sigma_n
-
     y = (blurry + noise).clamp(0.0, 1.0)
 
-    # ----- deblur (DPIR/HQS) -----
     x_hat = dpir_hqs_deblur(
         y=y, otf=otf, denoiser=model,
         sigma_img=sigma_img, lam=lam, n_iter=n_iter, sigma_max=49.0
     )
 
-    # ----- metrics -----
     psnr_blur = psnr_torch(y.detach().cpu(), x.detach().cpu())
     psnr_rec  = psnr_torch(x_hat.detach().cpu(), x.detach().cpu())
     
     ssim_blur = ssim_torch(y.detach().cpu(), x.detach().cpu())
     ssim_rec  = ssim_torch(x_hat.detach().cpu(), x.detach().cpu())
 
-    # ----- save results -----
     TF.to_pil_image(x.squeeze(0).cpu()).save(os.path.join(out_dir, "clean.png"))
     TF.to_pil_image(y.squeeze(0).cpu()).save(os.path.join(out_dir, f"blurry_k{kernel_index}_sigma{sigma_img:.2f}.png"))
     TF.to_pil_image(x_hat.squeeze(0).cpu()).save(os.path.join(out_dir, f"restored_k{kernel_index}_sigma{sigma_img:.2f}.png"))
 
-    # kernel visualization
     k_vis = (k / (k.max() + 1e-12)).detach().cpu().numpy()
     k_vis = (k_vis * 255.0).clip(0, 255).astype(np.uint8)
     Image.fromarray(k_vis).save(os.path.join(out_dir, f"kernel_k{kernel_index}.png"))
@@ -183,28 +170,28 @@ def run_deblur_one_return_metrics(
     lam: float = 0.23,
     seed: int = 0,
     save_outputs: bool = False,
-    out_dir: str = "results_DRUNET_deblur_batch",
+    out_dir: str = "./results_IRCNN_sigmamap/deblur_benchmark",
 ):
     if save_outputs:
         os.makedirs(out_dir, exist_ok=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # ----- load model -----
+    # load model
     model = IRCNNSigmaMap().to(device).eval()
     state = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(state["model"], strict=True)
 
-    # ----- load clean image -----
+    # load clean image
     clean_pil = Image.open(clean_path).convert("RGB")
     x = TF.to_tensor(clean_pil).unsqueeze(0).to(device)  # (1,3,H,W)
     _, _, H, W = x.shape
 
-    # ----- load kernel Levin09 -----
+    # load kernel Levin09
     k_np = load_levin09_kernel(levin09_path, kernel_index)
     k = torch.from_numpy(k_np).to(device)
 
-    # ----- blur (circular) + add Gaussian noise -----
+    # blur (circular) + add Gaussian noise
     otf = psf_to_otf(k, (H, W))
     blurry = circ_conv_fft(x, otf)
 
@@ -218,13 +205,13 @@ def run_deblur_one_return_metrics(
 
     y = (blurry + noise).clamp(0.0, 1.0)
 
-    # ----- deblur (DPIR/HQS) -----
+    # deblur (DPIR/HQS)
     x_hat = dpir_hqs_deblur(
         y=y, otf=otf, denoiser=model,
         sigma_img=sigma_img, lam=lam, n_iter=n_iter, sigma_max=49.0
     )
 
-    # ----- metrics -----
+    # metrics
     x_cpu = x.detach().cpu()
     y_cpu = y.detach().cpu()
     xhat_cpu = x_hat.detach().cpu()
@@ -235,7 +222,7 @@ def run_deblur_one_return_metrics(
     ssim_blur = ssim_torch(y_cpu, x_cpu)
     ssim_rec  = ssim_torch(xhat_cpu, x_cpu)
 
-    # ----- optional save -----
+    # optional save
     if save_outputs:
         base = os.path.splitext(os.path.basename(clean_path))[0]
         TF.to_pil_image(x_cpu.squeeze(0)).save(os.path.join(out_dir, f"{base}_clean.png"))
@@ -286,7 +273,6 @@ def benchmark_dpir_deblur_to_csv(
 
     rows = []
     for i, p in enumerate(chosen):
-        # seed différent par image pour le bruit
         row = run_deblur_one_return_metrics(
             clean_path=p,
             ckpt_path=ckpt_path,
