@@ -84,7 +84,7 @@ def run_single_image_demo(
     sigma: float = 20.0,
     seed: int = 0,
     modulo: int = 8,
-    ircnn_model_dir: str = "./IRCNN_v2/weights_ircnn_experts_colab",
+    ircnn_model_dir: str = "./weights_ircnn",
     ircnn_lambda: float = 1.0,
 ) -> Dict[str, float]:
     """

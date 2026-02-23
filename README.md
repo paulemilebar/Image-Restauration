@@ -117,6 +117,63 @@ Average PSNR (dB) ± std:
 
 The weights of our trained model could have not been pushed to the github because they are too big. We have it in local instead. Don't hesitate to email me, if you want the path.
 
+---
+
+## Tests & Reproducibility
+
+The repository is structured around the two main folders:
+
+- `DRUNet/`: all scripts for DRUNet-based PnP restoration (denoising, deblurring, SISR, inpainting)
+- `IRCNN/`: all scripts for IRCNN-based PnP restoration
+- `IRCNN_sigmamap/`: all scripts for IRCNN with conditionned sigma map PnP restoration
+
+### How to run an experiment
+
+For each task script, you will find **two entry points**:
+- **Single-image run**: restores one image and saves the reconstruction.
+- **Benchmark run**: restores a batch of test images and outputs average PSNR/SSIM.
+
+To choose what to run, simply **comment / uncomment the corresponding function call** at the bottom of the script (function names are explicit).
+
+### Required assets 
+
+To reproduce the results, you need:
+
+1) **Test images**
+- e.g. `BSDS300/images/test/` (or your own images but don't forget to change the images path in the function arguments)
+
+2) **Kernels (for deblurring / SISR)**
+- for exemple `kernels/Levin09.npy` used for deblurring
+
+3) **Model checkpoints (denoiser weights)**
+- DRUNet sigma-map conditioned weights
+- IRCNN bank of experts (multi-sigma checkpoints)
+- IRCNN+ (sigma-map conditioned) weights
+
+> **Nota bene:** model weights may not be included in this GitHub repository (large files).  
+> If you need the trained checkpoints used in the reported numbers, please contact me.
+
+### Paths to edit before running
+
+Before running, make sure you set the correct paths in the function call you execute:
+- `clean_path` (single image) or `test_dir` (benchmark folder)
+- `ckpt_path` (path to denoiser weights)
+- `levin09_path` / kernel paths
+- `out_dir`
+
+If dependencies are installed and paths are correct, the scripts should run end-to-end and save results automatically.
+
+### Outputs
+
+Results are saved into model-specific folders:
+
+- `results_DRUNET/` for ALL DRUNet experiments
+- `results_IRCNN/` for ALL IRCNN experiments
+- `results_IRCNN_sigmamap/` for IRCNN+ sigma-map experiments
+
+Each folder typically contains subfolders named after the **task** and whether it was a **single-image** run or a **benchmark** run.
+
+
 
 ## References
 
