@@ -1,14 +1,74 @@
 import os, math, random
 import numpy as np
 from PIL import Image
-
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
-
-from IRCNN import IRCNNModelManager
+from IRCNN_final import IRCNNModelManager
+from IRCNN_denoise import psnr_torch, ssim_torch
+from IRCNN_sr import save_img01
 import matplotlib.pyplot as plt
+from glob import glob
+import time
+import pandas as pd
 
+
+# Utils
+def l2norm_flat(x: torch.Tensor) -> torch.Tensor:
+    return torch.norm(x.reshape(-1), p=2)
+
+def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "drunet"):
+    """
+    metrics:
+      psnr_x:   list length K
+      ssim_x: list length K
+      rel_step: list length K (rel_step[k] = ||x_{k+1}-x_k|| / ||x0|| for k<=K-2, rel_step[K-1]=0)
+      cumsum:   list length K (cumsum[k] = sum_{i<=k} rel_step[i])
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    K = len(metrics["psnr_x"])
+    it = np.arange(K)
+
+    # --- 1) PSNR(x_k)
+    plt.figure()
+    plt.plot(it, metrics["psnr_x"])
+    plt.xlabel("itération k")
+    plt.ylabel("PSNR(x_k, GT) [dB]")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, f"{prefix}_psnr_xk.png"), dpi=200)
+    plt.close()
+    
+    plt.figure()
+    plt.plot(it, metrics["ssim_x"])
+    plt.xlabel("itération k")
+    plt.ylabel("SSIM(x_k, GT) [dB]")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, f"{prefix}_ssim_xk.png"), dpi=200)
+    plt.close()
+
+    # --- 2) ||x_{k+1}-x_k|| / ||x0|| (log scale)
+    rel = np.array(metrics["rel_step"], dtype=np.float64)
+    rel_safe = np.maximum(rel, 1e-16)  # évite log(0)
+    plt.figure()
+    plt.semilogy(it, rel_safe)
+    plt.xlabel("itération k")
+    plt.ylabel(r"relsafe")
+    plt.grid(True, which="both")
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, f"{prefix}_rel_step_log.png"), dpi=200)
+    plt.close()
+
+    # --- 3) somme cumulée
+    plt.figure()
+    plt.plot(it, metrics["cumsum"])
+    plt.xlabel("itération k")
+    plt.ylabel(r"cumsum")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, f"{prefix}_cumsum_rel_step.png"), dpi=200)
+    plt.close()
 
 def randn_like_compat(x: torch.Tensor, seed: int):
     try:
@@ -17,7 +77,6 @@ def randn_like_compat(x: torch.Tensor, seed: int):
     except TypeError:
         torch.manual_seed(seed)
         return torch.randn_like(x)
-
 
 def make_random_rect_mask(H: int, W: int, missing_ratio: float = 0.2, seed: int = 0,
                           min_rect: int = 2, max_rect: int = 7) -> torch.Tensor:
@@ -39,6 +98,7 @@ def make_random_rect_mask(H: int, W: int, missing_ratio: float = 0.2, seed: int 
     return torch.from_numpy(mask).unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
 
 
+# Shepard init (RGB) : Interpolation of neighboors points and do an average in the window used. This is an analytic method without Deep Learning
 def shepard_initialize_rgb(y01: torch.Tensor, M01: torch.Tensor, window: int = 9, p: float = 2.0) -> torch.Tensor:
     assert window % 2 == 1
     y = y01.squeeze(0).permute(1, 2, 0).detach().cpu().numpy()   # (H,W,3)
@@ -78,114 +138,378 @@ def shepard_initialize_rgb(y01: torch.Tensor, M01: torch.Tensor, window: int = 9
     return z0.clamp(0, 1)
 
 
-def solve_fidelity_inpainting(y, z, mask, mu, eps=1e-8):
-    return ((mask * y + mu * z) / (mask + mu + eps)).clamp(0,1)
+def get_rho_sigma_dpir(sigma_obs=2.55/255, iter_num=15, modelSigma2=2.55):
+    modelSigma1 = 49.0
+    modelSigmaS = np.logspace(np.log10(modelSigma1), np.log10(modelSigma2), iter_num).astype(np.float32)
+    sigmas = modelSigmaS / 255.0
+    mus = list(map(lambda x: (sigma_obs**2) / (x**2) / 3.0, sigmas))  # /3 pour RGB
+    rhos = mus
+    return np.array(rhos, np.float32), np.array(sigmas, np.float32)
 
 
-def save_img01(t: torch.Tensor, path: str):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    TF.to_pil_image(t.squeeze(0).clamp(0, 1).cpu()).save(path)
-    
-
-# --- PSNR ---
-def calculate_psnr(x, y, eps=1e-8):
-    mse = torch.mean((x - y)**2).item()
-    return 10 * math.log10(1.0 / (mse + eps))
-
-
-def test_inpaint_pnp(
-    image_path,
-    model_dir=r"./IRCNN_v2/weights_ircnn_experts_colab",
-    out_dir=r"./IRCNN_v2/tests_inpainting",
-    missing_ratio=0.15, 
-    seed=0,
-    n_iter=15, 
-    lambda_pnp = 3,
-    noise_sigma=5.0, 
-    sigma_n_pixels=2,
-    add_small_noise_in_holes = 0.01,
-    shepard_window=21, 
-    shepard_p=2.0
+# DPIR-style PnP-HQS Inpainting
+@torch.no_grad()
+def dpir_hqs_inpaint(
+    y: torch.Tensor,     # (1,3,H,W) masked observation (trous=0)
+    M: torch.Tensor,     # (1,1,H,W) 1 connu / 0 manquant
+    model_name: str,
+    model,
+    lambda_pnp: float = 0.23,
+    iter_num: int = 15,
+    sigma_obs_pix: float = 5.0,
+    modelSigma2_pix: float = 2.55,
+    shepard_window: int = 21,
+    shepard_p: float = 2.0,
+    add_small_noise_in_holes: float = 0.01,
+    seed: int = 0,
+    track_convergence: bool = False,
+    gt: torch.Tensor = None,   # (1,3,H,W) ground truth dans [0,1]
 ):
+    device = y.device
+    M3 = M.repeat(1, 3, 1, 1)
+
+    # schedule (DPIR)
+    sigma_obs = float(sigma_obs_pix) / 255.0
+    rhos, sigmas = get_rho_sigma_dpir(sigma_obs=sigma_obs, iter_num=iter_num, modelSigma2=modelSigma2_pix)
+    rhos_t = torch.tensor(rhos, device=device, dtype=y.dtype)
+
+    # init Shepard
+    z = shepard_initialize_rgb(y, M, window=shepard_window, p=shepard_p).to(device=device, dtype=y.dtype)
+    if add_small_noise_in_holes > 0:
+        z = (z + (1.0 - M3) * add_small_noise_in_holes * randn_like_compat(z, seed=seed)).clamp(0, 1)
+
+    # --- NEW: buffers convergence ---
+    metrics = None
+    if track_convergence:
+        metrics = {
+            "psnr_x":   [0.0] * iter_num,
+            "ssim_x":   [0.0] * iter_num,
+            "rel_step": [0.0] * iter_num,
+            "cumsum":   [0.0] * iter_num,
+        }
+        x_prev = None
+        x0_norm = None
+        csum = 0.0
+
+    for k in range(iter_num):
+        sigma_k = sigmas[k]
+        print(f"sigma:{sigma_k}")
+        mu = lambda_pnp/ (sigma_k**2)
+
+        # x-step (fermé pixelwise)
+        xk = (M3 * y + mu * z) / (M3 + mu)
+        xk = xk.clamp(0, 1)
+
+        # PSNR(x_k) and SSIM
+        if track_convergence and (gt is not None):
+            metrics["psnr_x"][k] = psnr_torch(xk, gt)
+            metrics["ssim_x"][k] = ssim_torch(xk, gt)
+
+        # z-step
+        expert = model.get_expert(255.0*sigma_k)
+        z = expert.denoise(xk).clamp(0, 1)
+
+        # enforce known pixels
+        z = (M3 * y + (1.0 - M3) * z).clamp(0, 1)
+
+        # ||x_{k+1}-x_k|| / ||x0|| + somme cumulée
+        if track_convergence:
+            if k == 0:
+                x_prev = xk.clone()
+                x0_norm = float(l2norm_flat(x_prev).item()) + 1e-12
+            else:
+                # ceci correspond à rel_step[k-1] = ||x_k - x_{k-1}|| / ||x0||
+                step = float(l2norm_flat(xk - x_prev).item()) / x0_norm
+                metrics["rel_step"][k - 1] = step
+                csum += step
+                metrics["cumsum"][k - 1] = csum
+                x_prev = xk.clone()
+
+
+    if track_convergence:
+        metrics["rel_step"][-1] = 0.0
+        metrics["cumsum"][-1] = csum
+
+    return (z, metrics) if track_convergence else z
+
+
+def run_compare(clean_path, out_dir, ckpt_path,
+                missing_ratio=0.15, seed=0,
+                iter_num=15, sigma_obs_pix=5.0, modelSigma2_pix=2.55,
+                shepard_window=21, shepard_p=2.0):
     os.makedirs(out_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # print("Device:", device)
+    print("Device:", device)
 
-    gt = TF.to_tensor(Image.open(image_path).convert("RGB")).unsqueeze(0).to(device).clamp(0, 1)
+    gt = TF.to_tensor(Image.open(clean_path).convert("RGB")).unsqueeze(0).to(device).clamp(0, 1)
     _, _, H, W = gt.shape
-    
+
     M = make_random_rect_mask(H, W, missing_ratio=missing_ratio, seed=seed).to(device=device, dtype=gt.dtype)
     M3 = M.repeat(1, 3, 1, 1)
     y = (gt * M3).clamp(0, 1)
 
-    sigma_obs = float(noise_sigma) / 255.0
+    sigma_obs = float(sigma_obs_pix) / 255.0
     if sigma_obs > 0:
         y = (M3 * (y + randn_like_compat(y, seed=seed+123) * sigma_obs)).clamp(0, 1)
+
+    save_img01(gt,  os.path.join(out_dir, "clean.png"))
+    save_img01(M3, os.path.join(out_dir, "mask.png"))
+    save_img01(y,  os.path.join(out_dir, "masked_noisy.png"))
+
+    rec_sh = shepard_initialize_rgb(y, M, window=shepard_window, p=shepard_p).to(device=device, dtype=gt.dtype)
+    rec_sh = (M3 * y + (1.0 - M3) * rec_sh).clamp(0, 1)
+    save_img01(rec_sh, os.path.join(out_dir, "restored_shepard_only.png"))
+
+    # Load IRCNN
+    ircnn_model = IRCNNModelManager(ckpt_path, device=device)
+
+    # IRCNN + tracking
+    rec_d, metrics_d = dpir_hqs_inpaint(
+        y=y, M=M, model_name="ircnn", model=ircnn_model,
+        iter_num=iter_num, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
+        shepard_window=shepard_window, shepard_p=shepard_p, seed=seed,
+        track_convergence=True, gt=gt
+    )
+
+
+    save_img01(rec_d, os.path.join(out_dir, "restored_dpir_hqs_ircnn.png"))
+
+    save_convergence_plots(metrics_d, out_dir=out_dir, prefix="ircnn")
+
+    # Final metrics
+    miss = (1.0 - M3)
+
+    def psnr_on_missing(a, b, missmask, eps=1e-12):
+        num = missmask.sum().item()
+        mse = (((a - b) * missmask) ** 2).sum().item() / (num + eps)
+        return 10.0 * math.log10(1.0 / (mse + eps))
+
+    print("Saved to:", out_dir)
+    print("PSNR global:")
+    print("  input        :", f"{psnr_torch(y, gt):.2f} dB")
+    print("  shepard-only :", f"{psnr_torch(rec_sh, gt):.2f} dB")
+    print("  DPIR+IRCNN  :", f"{psnr_torch(rec_d, gt):.2f} dB")
+    print("SSIM global:")
+    print("  input        :", f"{ssim_torch(y, gt):.2f}")
+    print("  shepard-only :", f"{ssim_torch(rec_sh, gt):.2f}")
+    print("  DPIR+IRCNN  :", f"{ssim_torch(rec_d, gt):.2f}")
     
-    # init Shepard
-    x = shepard_initialize_rgb(y, M, window=shepard_window, p=shepard_p).to(device=device, dtype=y.dtype)
-    if add_small_noise_in_holes > 0:
-        x = (x + (1.0 - M3) * add_small_noise_in_holes * randn_like_compat(x, seed=seed)).clamp(0, 1)
+    print("PSNR missing:")
+    print("  input        :", f"{psnr_on_missing(y,      gt, miss):.2f} dB")
+    print("  shepard-only :", f"{psnr_on_missing(rec_sh, gt, miss):.2f} dB")
+    print("  DPIR+IRCNN  :", f"{psnr_on_missing(rec_d,  gt, miss):.2f} dB")
     
-    sigmas_k = np.logspace(np.log10(49), np.log10(sigma_n_pixels), n_iter)
-    manager = IRCNNModelManager(model_dir, device=device)
+    print("Convergence plots saved:")
+    print(" ", os.path.join(out_dir, "ircnn_psnr_xk.png"))
+    print(" ", os.path.join(out_dir, "ircnn_ssim_xk.png"))
+    print(" ", os.path.join(out_dir, "ircnn_rel_step_log.png"))
+    print(" ", os.path.join(out_dir, "ircnn_cumsum_rel_step.png"))
     
-    psnr_degraded = calculate_psnr(x, gt)
-    best_psnr = -float("inf")
-    best_x = x.clone()
-    best_mu = 0
-    psnr_list = []
-    mu_list = []
     
-    for sk in sigmas_k:
-        mu = lambda_pnp/ (sk**2)
-        # Solve fidelity via CG
-        x = solve_fidelity_inpainting(y, x, M3, mu)
-        # Prior CNN
-        expert = manager.get_expert(sk)
-        with torch.no_grad():
-            x = expert.denoise(x).clamp(0,1) 
-        # hard enforce known pixels
-        x = (M3 * y + (1.0 - M3) * x).clamp(0, 1)
-        
-        # PSNR intermédiaire
-        p = calculate_psnr(x, gt)
-        psnr_list.append(p)
-        mu_list.append(mu)
-        if p > best_psnr:
-            best_psnr = p
-            best_x = x.clone()
-            best_mu = mu
+    
+############## CODE FOR BENCHMARK ####################
 
-    improvement = best_psnr - psnr_degraded
-    print(f"PSNR Degraded : {psnr_degraded:.2f} dB")
-    print(f"PSNR Restored : {best_psnr:.2f} dB for mu = {best_mu:.2f}")
-    print(f"Gain         : {improvement:.2f} dB")
+IMG_EXT = (".png", ".jpg", ".jpeg")
 
-    # 4. Sauvegarde et résultats
-    img_id = os.path.splitext(os.path.basename(image_path))[0]
-    TF.to_pil_image(gt.squeeze(0)).save(os.path.join(out_dir, f"{img_id}_cleaned.png"))
-    TF.to_pil_image(M3.squeeze(0)).save(os.path.join(out_dir, f"{img_id}_masked.png"))
-    TF.to_pil_image(y.squeeze(0)).save(os.path.join(out_dir, f"{img_id}_masked_noisy.png"))
-    TF.to_pil_image(best_x.squeeze(0)).save(os.path.join(out_dir, f"{img_id}_restaured.png"))
-    print(f"Terminé ! Images sauvegardées dans le dossier '{out_dir}'.")
-    plt.plot(mu_list,psnr_list,'o')
-    plt.plot([0],[psnr_degraded], color='orange', marker='x')
-    plt.axvline(x=best_mu, color='red', linestyle='--', linewidth=2)
-    plt.show()
+def list_images_in_dir(root: str):
+    paths = []
+    for ext in IMG_EXT:
+        paths += glob(os.path.join(root, f"**/*{ext}"), recursive=True)
+        paths += glob(os.path.join(root, f"**/*{ext.upper()}"), recursive=True)
+    return sorted(list(set(paths)))
+
+def pick_n_images(paths, n=10, seed=0):
+    rng = random.Random(seed)
+    if n >= len(paths):
+        return paths
+    return rng.sample(paths, n)
 
 
-import random
+@torch.no_grad()
+def run_compare_return_metrics(
+    clean_path,
+    out_dir,
+    model_ircnn,
+    missing_ratio=0.15,
+    seed=0,
+    iter_num=15,
+    sigma_obs_pix=5.0,
+    modelSigma2_pix=2.55,
+    shepard_window=21,
+    shepard_p=2.0,
+    save_outputs=True,
+    save_convergence=True
+):
+    os.makedirs(out_dir, exist_ok=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Choix aléatoire de l'image test
-IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff")
-clean_dir = r"./BSDS300/images/test" 
-paths = [
-            os.path.join(clean_dir, f) for f in os.listdir(clean_dir)
-            if f.lower().endswith(IMG_EXT)
-        ]
+    gt = TF.to_tensor(Image.open(clean_path).convert("RGB")).unsqueeze(0).to(device).clamp(0, 1)
+    _, _, H, W = gt.shape
 
-assert len(paths) > 0, f"Aucune image trouvée dans {clean_dir}"
-image_path = random.choice(paths)
-print("Image choisie:", image_path)
-print(test_inpaint_pnp(image_path=image_path))
+    M = make_random_rect_mask(H, W, missing_ratio=missing_ratio, seed=seed).to(device=device, dtype=gt.dtype)
+    M3 = M.repeat(1, 3, 1, 1)
+    y = (gt * M3).clamp(0, 1)
+
+    # noise observation (on known pixels)
+    sigma_obs = float(sigma_obs_pix) / 255.0
+    if sigma_obs > 0:
+        y = (M3 * (y + randn_like_compat(y, seed=seed+123) * sigma_obs)).clamp(0, 1)
+
+    # Shepard init
+    rec_sh = shepard_initialize_rgb(y, M, window=int(shepard_window), p=shepard_p).to(device=device, dtype=gt.dtype)
+    rec_sh = (M3 * y + (1.0 - M3) * rec_sh).clamp(0, 1)
+
+    # DPIR-HQS
+    t0 = time.perf_counter()
+    out = dpir_hqs_inpaint(
+    y=y, M=M, model_name="ircnn", model=model_ircnn,
+    iter_num=iter_num, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
+    shepard_window=int(shepard_window), shepard_p=shepard_p, seed=seed,
+    track_convergence=save_convergence, gt=gt
+    )
+
+    if save_convergence:
+        rec_d, metrics_d = out
+    else:
+        rec_d = out
+        metrics_d = None
+
+    t_d = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+
+    miss = (1.0 - M3)
+
+    def psnr_on_missing(a, b, missmask, eps=1e-12):
+        num = missmask.sum().item()
+        mse = (((a - b) * missmask) ** 2).sum().item() / (num + eps)
+        return 10.0 * math.log10(1.0 / (mse + eps))
+
+    res = {
+        "image": os.path.basename(clean_path),
+        "H": H, "W": W,
+        "missing_ratio": float(missing_ratio),
+        "iter_num": int(iter_num),
+        "sigma_obs_pix": float(sigma_obs_pix),
+        "shepard_window": int(shepard_window),
+        "psnr_input": psnr_torch(y, gt),
+        "psnr_shepard": psnr_torch(rec_sh, gt),
+        "psnr_dpir_drunet": psnr_torch(rec_d, gt),
+        "ssim_input": ssim_torch(y, gt),
+        "ssim_shepard": ssim_torch(rec_sh, gt),
+        "ssim_dpir_drunet": ssim_torch(rec_d, gt),
+        "psnr_miss_input": psnr_on_missing(y, gt, miss),
+        "psnr_miss_shepard": psnr_on_missing(rec_sh, gt, miss),
+        "psnr_miss_dpir_drunet": psnr_on_missing(rec_d, gt, miss),
+        "time_drunet_s": t_d,
+    }
+
+    if save_outputs:
+        save_img01(gt,  os.path.join(out_dir, "clean.png"))
+        save_img01(M3, os.path.join(out_dir, "mask.png"))
+        save_img01(y,  os.path.join(out_dir, "masked_noisy.png"))
+        save_img01(rec_sh, os.path.join(out_dir, "restored_shepard_only.png"))
+        save_img01(rec_d,  os.path.join(out_dir, "restored_dpir_hqs_drunet.png"))
+
+        if save_convergence and (metrics_d is not None):
+            save_convergence_plots(metrics_d, out_dir=out_dir, prefix="drunet")
+
+    return res
+
+
+def run_pool_10_images(
+    clean_dir,
+    out_root,
+    ckpt_path,
+    n_images=10,
+    seed=0,
+    missing_ratio=0.45,
+    iter_num=20,
+    sigma_obs_pix=5.0,
+    modelSigma2_pix=2.55,
+    shepard_window=21,
+    shepard_p=2.0,
+    save_outputs_per_image=False,
+    save_convergence=False,
+    csv_name="results_pool.csv"
+):
+    os.makedirs(out_root, exist_ok=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Device:", device)
+
+    paths = list_images_in_dir(clean_dir)
+    chosen = pick_n_images(paths, n=n_images, seed=seed)
+
+    model_ircnn = IRCNNModelManager(ckpt_path, device=device)
+
+    rows = []
+    for p in chosen:
+        name = os.path.splitext(os.path.basename(p))[0]
+        print(name)
+        out_dir = os.path.join(out_root, name) if save_outputs_per_image else out_root
+
+        r = run_compare_return_metrics(
+            clean_path=p,
+            out_dir=out_dir,
+            model_ircnn=model_ircnn,
+            missing_ratio=missing_ratio,
+            seed=seed,
+            iter_num=iter_num,
+            sigma_obs_pix=sigma_obs_pix,
+            modelSigma2_pix=modelSigma2_pix,
+            shepard_window=shepard_window,
+            shepard_p=shepard_p,
+            save_outputs=save_outputs_per_image,
+            save_convergence=save_convergence
+        )
+        rows.append(r)
+        print(r)
+
+    df = pd.DataFrame(rows)
+
+    metric_cols = [c for c in df.columns if c.startswith("psnr") or c.startswith("time_") or c.startswith("ssim")]
+    mean_row = {"image": "MEAN"}
+    std_row  = {"image": "STD"}
+    for c in metric_cols:
+        mean_row[c] = float(df[c].mean())
+        std_row[c]  = float(df[c].std())
+    df2 = pd.concat([df, pd.DataFrame([mean_row, std_row])], ignore_index=True)
+
+    csv_path = os.path.join(out_root, csv_name)
+    df2.to_csv(csv_path, index=False)
+    print("[DONE] CSV saved:", csv_path)
+    
+    return df2
+
+
+run_compare(
+    clean_path="./BSDS300/images/test/37073.jpg",
+    out_dir="./results_IRCNN/inpainting_single",
+    ckpt_path="./weights_ircnn",
+    missing_ratio=0.45,
+    seed=0,
+    iter_num=20,
+    sigma_obs_pix=5.0,
+    modelSigma2_pix=2.55,   
+    shepard_window=11,
+    shepard_p=2.0,
+)
+    
+    
+'''df = run_pool_10_images(
+        clean_dir=r"./BSDS300/images/test",
+        out_root="./results_IRCNN/inpainting_benchmark",
+        ckpt_path="./weights_ircnn",
+        n_images=10,
+        seed=0,
+        missing_ratio=0.42,
+        iter_num=20,
+        sigma_obs_pix=5.0,
+        modelSigma2_pix=2.55,
+        shepard_window=21,
+        shepard_p=2.0,
+        save_outputs_per_image=False,
+        save_convergence=False,
+        csv_name="pool10_metrics.csv"
+    )'''
+    

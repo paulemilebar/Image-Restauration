@@ -419,7 +419,7 @@ def benchmark_sisr_10_random_to_csv(
     print(f"Gain          : {df['gain_db'].mean():.2f} dB")
     print(f"SSIM bicubic  : {df['ssim_bicubic'].mean():.2f} dB")
     print(f"SSIM restored : {df['ssim_restored'].mean():.2f} dB")
-    print(f"Gain  SSIM        : {df['ssim_gain'].mean():.2f} dB")
+    print(f"Gain  SSIM    : {df['ssim_gain'].mean():.2f} dB")
     print("CSV saved:", csv_path)
 
     return df, csv_path

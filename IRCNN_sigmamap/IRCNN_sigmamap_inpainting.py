@@ -370,12 +370,12 @@ def run_compare(
     print(" ", os.path.join(out_dir, "ircnn_cumsum_rel_step.png"))
     
 
-'''clean_path = "./BSDS300/images/test\87046.jpg"
+clean_path = "./BSDS300/images/test\87046.jpg"
 print("Image choisie:", clean_path)
-run_compare(clean_path=clean_path)'''
+run_compare(clean_path=clean_path)
 
 
-@torch.no_grad()
+'''@torch.no_grad()
 def run_compare_return_metrics(
     clean_path,
     out_dir,
@@ -564,7 +564,7 @@ def run_pool_10_images(
     #    modelSigma2_pix=2.55,   
     #    shepard_window=11,
     #    shepard_p=2.0,
-    #)
+    #)'''
     
     
 '''df = run_pool_10_images(
