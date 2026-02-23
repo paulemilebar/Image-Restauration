@@ -214,10 +214,10 @@ def dpir_hqs_inpaint(
         csum_z = 0.0
 
     for k in range(iter_num):
-        #mu = rhos_t[k].view(1, 1, 1, 1)
+        mu = rhos_t[k].view(1, 1, 1, 1)
         sigma_k = sigmas[k]
         #print(f"sigma:{sigma_k}")
-        mu = lambda_pnp/ (sigma_k**2)
+        #mu = lambda_pnp/ (sigma_k**2)
         # x-step (fermé pixelwise)
         xk = (M3 * y + mu * z) / (M3 + mu)
         xk = xk.clamp(0, 1)
@@ -265,13 +265,13 @@ def run_compare(
     clean_path,
     ircnn_ckpt="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
     out_dir="./results_IRCNN_sigmamap/inpainting_single_v2",
-    missing_ratio=0.15, 
+    missing_ratio=0.45, 
     seed=0,
-    iter_num=15,
+    iter_num=20,
     lambda_pnp=0.23,
     sigma_obs_pix=5.0, 
     modelSigma2_pix=2.55,
-    shepard_window=21, 
+    shepard_window=11, 
     shepard_p=2.0
 ):
     os.makedirs(out_dir, exist_ok=True)
