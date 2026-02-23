@@ -18,48 +18,62 @@ def l2norm_flat(x: torch.Tensor) -> torch.Tensor:
     return torch.norm(x.reshape(-1), p=2)
 
 def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "ircnn"):
-    """
-    metrics:
-      psnr_x:   list length K
-      rel_step: list length K (rel_step[k] = ||x_{k+1}-x_k|| / ||x0|| for k<=K-2, rel_step[K-1]=0)
-      cumsum:   list length K (cumsum[k] = sum_{i<=k} rel_step[i])
-    """
     os.makedirs(out_dir, exist_ok=True)
     K = len(metrics["psnr_x"])
     it = np.arange(K)
+    it2 = np.arange(K-1)
+    
 
-    # PSNR(x_k)
+    # PSNR
     plt.figure()
-    plt.plot(it, metrics["psnr_x"])
+    plt.plot(it, metrics["psnr_x"], label="PSNR x_k")
+    plt.plot(it, metrics["psnr_z"], label="PSNR z_k")
     plt.xlabel("itération k")
-    plt.ylabel("PSNR(x_k, GT) [dB]")
+    plt.ylabel("PSNR [dB]")
+    plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, f"{prefix}_psnr_xk.png"), dpi=200)
+    plt.savefig(os.path.join(out_dir, f"{prefix}_psnr.png"), dpi=200)
+    plt.close()
+    
+    plt.figure()
+    plt.plot(it, metrics["ssim_x"], label="SSIM x_k")
+    plt.plot(it, metrics["ssim_z"], label="SSIM z_k")
+    plt.xlabel("itération k")
+    plt.ylabel("SSIM")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, f"{prefix}_ssim.png"), dpi=200)
     plt.close()
 
-    # ||x_{k+1}-x_k|| / ||x0|| (log scale)
-    rel = np.array(metrics["rel_step"], dtype=np.float64)
-    rel_safe = np.maximum(rel, 1e-16)
+    # --- 2) ||x_{k+1}-x_k|| / ||x0|| (log scale)
+    relx = np.array(metrics["rel_step_x"])
+    relz = np.array(metrics["rel_step_z"])
+    relx = np.maximum(relx, 1e-16)
+    relz = np.maximum(relz, 1e-16)
     plt.figure()
-    plt.semilogy(it, rel_safe)
-    plt.xlabel("itération k")
+    plt.semilogy(it2, relx, label=r"$(x_k-x_{k-1})/(x_0)$")
+    plt.semilogy(it2, relz, label=r"$\|z_k-z_{k-1}\|/\|z_0\|$")    
+    plt.xlabel("iteration k")
     plt.ylabel(r"relsafe")
     plt.grid(True, which="both")
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, f"{prefix}_rel_step_log.png"), dpi=200)
     plt.close()
 
-    # somme cumulée
+    # Cumsum
+    cx = np.array(metrics["cumsum_x"])
+    cz = np.array(metrics["cumsum_z"])
     plt.figure()
-    plt.plot(it, metrics["cumsum"])
-    plt.xlabel("itération k")
+    plt.plot(it2, cx, label="cumsum x")
+    plt.plot(it2, cz, label="cumsum z")    
+    plt.xlabel("iteration k")
     plt.ylabel(r"cumsum")
     plt.grid(True)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, f"{prefix}_cumsum_rel_step.png"), dpi=200)
     plt.close()
-
 
 def randn_like_compat(x: torch.Tensor, seed: int):
     try:
@@ -143,7 +157,7 @@ def denoise_sigma_map(model_name: str, model, x3: torch.Tensor, sigma: float):
     B, C, H, W = x3.shape
     sigma_map = torch.full((B, 1, H, W), float(sigma), device=x3.device, dtype=x3.dtype)
     inp4 = torch.cat([x3, sigma_map], dim=1)
-    return ircnn_infer(model, inp4, modulo=8).clamp(0, 1)
+    return ircnn_infer(model, inp4).clamp(0, 1)
 
 # DPIR-style PnP-HQS Inpainting
 @torch.no_grad()
@@ -153,6 +167,7 @@ def dpir_hqs_inpaint(
     model_name: str,
     model,
     iter_num: int = 15,
+    lambda_pnp: float = 0.23,
     sigma_obs_pix: float = 5.0,
     modelSigma2_pix: float = 2.55,
     shepard_window: int = 21,
@@ -180,18 +195,27 @@ def dpir_hqs_inpaint(
     if track_convergence:
         metrics = {
             "psnr_x":   [0.0] * iter_num,
+            "psnr_z":   [0.0] * iter_num,
             "ssim_x":   [0.0] * iter_num,
-            "rel_step": [0.0] * iter_num,
-            "cumsum":   [0.0] * iter_num,
+            "ssim_z":   [0.0] * iter_num,
+            # rel changes
+            "rel_step_x": [0.0] * (iter_num-1),
+            "rel_step_z": [0.0] * (iter_num-1),
+            "cumsum_x":   [0.0] * (iter_num-1),
+            "cumsum_z":   [0.0] * (iter_num-1),
         }
         x_prev = None
         x0_norm = None
-        csum = 0.0
+        z0_norm = None
+        csum_x = 0.0
+        csum_z = 0.0
 
     for k in range(iter_num):
-        mu = rhos_t[k].view(1, 1, 1, 1)
-
-        # x-step
+        #mu = rhos_t[k].view(1, 1, 1, 1)
+        sigma_k = sigmas[k]
+        #print(f"sigma:{sigma_k}")
+        mu = lambda_pnp/ (sigma_k**2)
+        # x-step (fermé pixelwise)
         xk = (M3 * y + mu * z) / (M3 + mu)
         xk = xk.clamp(0, 1)
 
@@ -206,22 +230,30 @@ def dpir_hqs_inpaint(
 
         # enforce known pixels
         z = (M3 * y + (1.0 - M3) * z).clamp(0, 1)
+        
+        if track_convergence and (gt is not None):
+            metrics["psnr_z"][k] = psnr_torch(z, gt)
+            metrics["ssim_z"][k] = ssim_torch(z, gt)
 
-        # ||x_{k+1}-x_k|| / ||x0|| + somme cumulée
-        if track_convergence:
             if k == 0:
                 x_prev = xk.clone()
+                z_prev = z.clone()
                 x0_norm = float(l2norm_flat(x_prev).item()) + 1e-12
+                z0_norm = float(l2norm_flat(z_prev).item()) + 1e-12
             else:
-                step = float(l2norm_flat(xk - x_prev).item()) / x0_norm
-                metrics["rel_step"][k - 1] = step
-                csum += step
-                metrics["cumsum"][k - 1] = csum
-                x_prev = xk.clone()
+                step_x = float(l2norm_flat(xk - x_prev).item()) / x0_norm
+                step_z = float(l2norm_flat(z  - z_prev).item()) / z0_norm
 
-    if track_convergence:
-        metrics["rel_step"][-1] = 0.0
-        metrics["cumsum"][-1] = csum
+                metrics["rel_step_x"][k - 1] = step_x
+                metrics["rel_step_z"][k - 1] = step_z
+
+                csum_x += step_x
+                csum_z += step_z
+                metrics["cumsum_x"][k - 1] = csum_x
+                metrics["cumsum_z"][k - 1] = csum_z
+
+                x_prev = xk.clone()
+                z_prev = z.clone()
 
     return (z, metrics) if track_convergence else z
 
@@ -232,7 +264,8 @@ def run_compare(
     out_dir="./results_IRCNN_sigmamap/inpainting_single",
     missing_ratio=0.15, 
     seed=0,
-    iter_num=15, 
+    iter_num=15,
+    lambda_pnp=0.23,
     sigma_obs_pix=5.0, 
     modelSigma2_pix=2.55,
     shepard_window=21, 
@@ -268,7 +301,7 @@ def run_compare(
     # IRCNN+
     rec_d, metrics_d = dpir_hqs_inpaint(
         y=y, M=M, model_name="ircnn", model=ircnn,
-        iter_num=iter_num, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
+        iter_num=iter_num, lambda_pnp=lambda_pnp, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
         shepard_window=shepard_window, shepard_p=shepard_p, seed=seed,
         track_convergence=True, gt=gt
     )
@@ -318,6 +351,7 @@ def run_compare_return_metrics(
     missing_ratio=0.15,
     seed=0,
     iter_num=15,
+    lambda_pnp=0.23,
     sigma_obs_pix=5.0,
     modelSigma2_pix=2.55,
     shepard_window=21,
@@ -348,7 +382,7 @@ def run_compare_return_metrics(
     t0 = time.perf_counter()
     out = dpir_hqs_inpaint(
     y=y, M=M, model_name="ircnn", model=ircnn,
-    iter_num=iter_num, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
+    iter_num=iter_num, lambda_pnp=lambda_pnp, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
     shepard_window=int(shepard_window), shepard_p=shepard_p, seed=seed,
     track_convergence=save_convergence, gt=gt
     )
@@ -432,6 +466,7 @@ def run_pool_10_images(
     seed=0,
     missing_ratio=0.45,
     iter_num=20,
+    lambda_pnp=0.23,
     sigma_obs_pix=5.0,
     modelSigma2_pix=2.55,
     shepard_window=21,
@@ -462,6 +497,7 @@ def run_pool_10_images(
             missing_ratio=missing_ratio,
             seed=seed,
             iter_num=iter_num,
+            lambda_pnp=lambda_pnp,
             sigma_obs_pix=sigma_obs_pix,
             modelSigma2_pix=modelSigma2_pix,
             shepard_window=shepard_window,
@@ -496,6 +532,7 @@ def run_pool_10_images(
         seed=0,
         missing_ratio=0.42,
         iter_num=20,
+        lambda_pnp=0.23,
         sigma_obs_pix=5.0,
         modelSigma2_pix=2.55,
         shepard_window=21,
