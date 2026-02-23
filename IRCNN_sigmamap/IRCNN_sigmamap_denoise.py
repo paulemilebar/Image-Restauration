@@ -7,6 +7,7 @@ import torchvision.transforms.functional as TF
 import torch.nn.functional as F
 from torchmetrics.functional.image.ssim import structural_similarity_index_measure as ssim_fn
 from typing import Optional, Tuple, Dict, List
+from pool_images_test.generate_pool_images import load_paths_from_file
 
 def psnr_torch(x, y, eps=1e-8):
     mse = torch.mean((x - y) ** 2).item()
@@ -125,14 +126,16 @@ def benchmark_ircnn_sigmap(
     os.makedirs(out_dir, exist_ok=True)
     model, device = load_ircnn(ckpt_path)
 
-    all_paths = list_images(test_dir)
+    '''all_paths = list_images(test_dir)
     if len(all_paths) == 0:
         raise RuntimeError(f"Aucune image trouvée dans {test_dir}")
     if len(all_paths) < n_images:
         raise RuntimeError(f"Pas assez d'images: {len(all_paths)} < {n_images}")
 
     rng = random.Random(seed)
-    chosen = rng.sample(all_paths, n_images)
+    chosen = rng.sample(all_paths, n_images)'''
+    
+    chosen = load_paths_from_file("./pool_images_test/benchmark_10_images.txt")
 
     rows = []
     for i, path in enumerate(chosen):
@@ -205,5 +208,5 @@ def benchmark_ircnn_sigmap(
 
 
 if __name__ == "__main__":
-    benchmark_ircnn_sigmap(test_dir="./BSDS300/images/test", ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth", out_dir="results_IRCNN_sigmamap/denoise_benchmark", sigma=20.0, n_images=10, seed=0, save_examples=False)
+    benchmark_ircnn_sigmap(test_dir="./BSDS300/images/test", ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth", out_dir="results_IRCNN_sigmamap/denoise_benchmark_v2", sigma=20.0, n_images=10, seed=0, save_examples=False)
 

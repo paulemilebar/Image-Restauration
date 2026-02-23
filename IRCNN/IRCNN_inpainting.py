@@ -207,7 +207,7 @@ def dpir_hqs_inpaint(
         #mu = rhos_t[k].view(1, 1, 1, 1)
         sigma_k = sigmas[k]
         #print(f"sigma:{sigma_k}")
-        mu = lambda_pnp/ ((255.0*sigma_k)**2)
+        mu = lambda_pnp/ (sigma_k**2)
         # x-step (fermé pixelwise)
         xk = (M3 * y + mu * z) / (M3 + mu)
         xk = xk.clamp(0, 1)

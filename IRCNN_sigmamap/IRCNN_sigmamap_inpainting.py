@@ -228,7 +228,7 @@ def dpir_hqs_inpaint(
             metrics["ssim_x"][k] = ssim_torch(xk, gt)
 
         # z-step
-        sigma_k = float(255.0*sigmas[k])
+        sigma_k = float(sigmas[k])
         z = denoise_sigma_map(model_name, model, xk, sigma=sigma_k)
 
         # enforce known pixels
