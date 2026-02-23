@@ -29,6 +29,7 @@ def circ_conv_fft(x: torch.Tensor, otf: torch.Tensor) -> torch.Tensor:
     Y = X * otf[None, None, :, :]
     return torch.fft.ifft2(Y, dim=(-2, -1)).real
 
+
 @torch.no_grad()
 def dpir_hqs_deblur(
     y: torch.Tensor,

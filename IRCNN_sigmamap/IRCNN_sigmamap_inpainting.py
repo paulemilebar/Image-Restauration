@@ -28,7 +28,7 @@ def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "ircnn"):
     K = len(metrics["psnr_x"])
     it = np.arange(K)
 
-    # --- 1) PSNR(x_k)
+    # PSNR(x_k)
     plt.figure()
     plt.plot(it, metrics["psnr_x"])
     plt.xlabel("itération k")
@@ -38,9 +38,9 @@ def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "ircnn"):
     plt.savefig(os.path.join(out_dir, f"{prefix}_psnr_xk.png"), dpi=200)
     plt.close()
 
-    # --- 2) ||x_{k+1}-x_k|| / ||x0|| (log scale)
+    # ||x_{k+1}-x_k|| / ||x0|| (log scale)
     rel = np.array(metrics["rel_step"], dtype=np.float64)
-    rel_safe = np.maximum(rel, 1e-16)  # évite log(0)
+    rel_safe = np.maximum(rel, 1e-16)
     plt.figure()
     plt.semilogy(it, rel_safe)
     plt.xlabel("itération k")
@@ -50,7 +50,7 @@ def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "ircnn"):
     plt.savefig(os.path.join(out_dir, f"{prefix}_rel_step_log.png"), dpi=200)
     plt.close()
 
-    # --- 3) somme cumulée
+    # somme cumulée
     plt.figure()
     plt.plot(it, metrics["cumsum"])
     plt.xlabel("itération k")
@@ -87,10 +87,10 @@ def make_random_rect_mask(H: int, W: int, missing_ratio: float = 0.2, seed: int 
         after = mask[y0:y0+rh, x0:x0+rw].sum()
         missing += int(before - after)
 
-    return torch.from_numpy(mask).unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
+    return torch.from_numpy(mask).unsqueeze(0).unsqueeze(0)
 
 
-# Shepard init (RGB) : Interpolation of neighboors points and do an average in the window used. This is an analytic method without Deep Learning
+# Shepard init
 def shepard_initialize_rgb(y01: torch.Tensor, M01: torch.Tensor, window: int = 9, p: float = 2.0) -> torch.Tensor:
     assert window % 2 == 1
     y = y01.squeeze(0).permute(1, 2, 0).detach().cpu().numpy()   # (H,W,3)
@@ -130,7 +130,6 @@ def shepard_initialize_rgb(y01: torch.Tensor, M01: torch.Tensor, window: int = 9
     return z0.clamp(0, 1)
 
 
-# Schedule DPIR utils_inpaint
 def get_rho_sigma_dpir(sigma_obs=2.55/255, iter_num=15, modelSigma2=2.55):
     modelSigma1 = 49.0
     modelSigmaS = np.logspace(np.log10(modelSigma1), np.log10(modelSigma2), iter_num).astype(np.float32)
@@ -176,7 +175,7 @@ def dpir_hqs_inpaint(
     if add_small_noise_in_holes > 0:
         z = (z + (1.0 - M3) * add_small_noise_in_holes * randn_like_compat(z, seed=seed)).clamp(0, 1)
 
-    # --- NEW: buffers convergence ---
+    # buffers convergence
     metrics = None
     if track_convergence:
         metrics = {
@@ -192,7 +191,7 @@ def dpir_hqs_inpaint(
     for k in range(iter_num):
         mu = rhos_t[k].view(1, 1, 1, 1)
 
-        # x-step (fermé pixelwise)
+        # x-step
         xk = (M3 * y + mu * z) / (M3 + mu)
         xk = xk.clamp(0, 1)
 
@@ -202,7 +201,7 @@ def dpir_hqs_inpaint(
             metrics["ssim_x"][k] = ssim_torch(xk, gt)
 
         # z-step
-        sigma_k = float(sigmas[k])  # déjà normalisé [0,1]
+        sigma_k = float(sigmas[k])
         z = denoise_sigma_map(model_name, model, xk, sigma=sigma_k)
 
         # enforce known pixels
@@ -214,81 +213,17 @@ def dpir_hqs_inpaint(
                 x_prev = xk.clone()
                 x0_norm = float(l2norm_flat(x_prev).item()) + 1e-12
             else:
-                # ceci correspond à rel_step[k-1] = ||x_k - x_{k-1}|| / ||x0||
                 step = float(l2norm_flat(xk - x_prev).item()) / x0_norm
                 metrics["rel_step"][k - 1] = step
                 csum += step
                 metrics["cumsum"][k - 1] = csum
                 x_prev = xk.clone()
 
-
     if track_convergence:
         metrics["rel_step"][-1] = 0.0
         metrics["cumsum"][-1] = csum
 
     return (z, metrics) if track_convergence else z
-
-
-'''def inpainting_ircnn(
-    clean_path,
-    ircnn_ckpt="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
-    out_dir="./results_IRCNN_sigmamap/inpainting_single_v2",
-    missing_ratio=0.15, 
-    seed=0,
-    iter_num=15, 
-    sigma_obs_pix=5.0, 
-    modelSigma2_pix=2.55,
-    shepard_window=21, 
-    shepard_p=2.0
-):
-    os.makedirs(out_dir, exist_ok=True)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    gt = TF.to_tensor(Image.open(clean_path).convert("RGB")).unsqueeze(0).to(device).clamp(0, 1)
-    _, _, H, W = gt.shape
-
-    M = make_random_rect_mask(H, W, missing_ratio=missing_ratio, seed=seed).to(device=device, dtype=gt.dtype)
-    M3 = M.repeat(1, 3, 1, 1)
-    y = (gt * M3).clamp(0, 1)
-
-    sigma_obs = float(sigma_obs_pix) / 255.0
-    if sigma_obs > 0:
-        y = (M3 * (y + randn_like_compat(y, seed=seed+123) * sigma_obs)).clamp(0, 1)
-
-    img_id = os.path.splitext(os.path.basename(clean_path))[0]
-    img_dir = os.path.join(out_dir, img_id)
-    os.makedirs(img_dir, exist_ok=True)
-
-    rec_sh = shepard_initialize_rgb(y, M, window=shepard_window, p=shepard_p).to(device=device, dtype=gt.dtype)
-    rec_sh = (M3 * y + (1.0 - M3) * rec_sh).clamp(0, 1)
-    
-    # Load IRCNN
-    ircnn = IRCNNSigmaMap(features=64).to(device).eval()
-    st = torch.load(ircnn_ckpt, map_location=device)
-    sd = st["model"] if isinstance(st, dict) and "model" in st else st
-    ircnn.load_state_dict(sd, strict=True)
-
-    # --- IRCNN sans tracking (ou mets track_convergence=True si tu veux aussi)
-    rec_i = dpir_hqs_inpaint(
-        y=y, M=M, model_name="ircnn", model=ircnn,
-        iter_num=iter_num, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
-        shepard_window=shepard_window, shepard_p=shepard_p, seed=seed
-    )
-
-    save_img01(rec_i, os.path.join(img_dir, "restored_ircnn.png"))
-
-    print("PSNR global:")
-    print("  input        :", f"{psnr_torch(y, gt):.2f} dB")
-    print("  shepard-only :", f"{psnr_torch(rec_sh, gt):.2f} dB")
-    print("  DPIR - IRCNN+:", f"{psnr_torch(rec_i, gt):.2f} dB")
-    
-    return psnr_torch(y, gt), psnr_torch(rec_i, gt)
-    
-clean_path = r"./BSDS300/images/test\87046.jpg"
-print("Image choisie:", clean_path)
-inpainting_ircnn(clean_path=clean_path)'''
-
-
 
 
 def run_compare(
@@ -330,7 +265,7 @@ def run_compare(
     sd = st["model"] if isinstance(st, dict) and "model" in st else st
     ircnn.load_state_dict(sd, strict=True)
 
-    # --- IRCNN sans tracking (ou mets track_convergence=True si tu veux aussi)
+    # IRCNN+
     rec_d, metrics_d = dpir_hqs_inpaint(
         y=y, M=M, model_name="ircnn", model=ircnn,
         iter_num=iter_num, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
@@ -375,7 +310,7 @@ print("Image choisie:", clean_path)
 run_compare(clean_path=clean_path)
 
 
-'''@torch.no_grad()
+@torch.no_grad()
 def run_compare_return_metrics(
     clean_path,
     out_dir,
@@ -551,21 +486,7 @@ def run_pool_10_images(
     print("[DONE] CSV saved:", csv_path)
     
     return df2
-
-
-#run_compare(
- #       clean_path=r"./BSDS300/images/test/37073.jpg",
- #       out_dir="results_DRUNET/results_DRUNET_SHEPARD_inpaint",
- #       drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
-  #      missing_ratio=0.45,
-   #     seed=0,
-    #    iter_num=20,
-    #    sigma_obs_pix=5.0,
-    #    modelSigma2_pix=2.55,   
-    #    shepard_window=11,
-    #    shepard_p=2.0,
-    #)'''
-    
+   
     
 '''df = run_pool_10_images(
         clean_dir=r"./BSDS300/images/test",

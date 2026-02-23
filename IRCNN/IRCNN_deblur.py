@@ -82,8 +82,7 @@ def dpir_hqs_deblur(
 
         # z-step = denoise(x, sigma_d)
         expert = manager.get_expert(sigma_d)
-        z = expert.denoise(x)
-        #z = z.clamp(0, 1)
+        z = expert.denoise(x).clamp(0, 1)
 
     return z
 

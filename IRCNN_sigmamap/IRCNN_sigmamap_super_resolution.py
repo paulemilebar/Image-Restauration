@@ -198,7 +198,7 @@ def run_one(
         sigma_map = torch.full((B, 1, H, W), sigma_i, device=device, dtype=xk.dtype)
         inp = torch.cat([xk, sigma_map], dim=1)
 
-        z = ircnn_infer(model, inp, modulo=8).clamp(0, 1)
+        z = ircnn_infer(model, inp).clamp(0, 1)
 
         psnr_x.append(psnr_torch(xk.cpu(), x.cpu()))
         psnr_z.append(psnr_torch(z.cpu(),  x.cpu()))
@@ -241,14 +241,14 @@ def run_one(
     plt.savefig(os.path.join(out_dir, "ssim_curves.png"), dpi=200)
     plt.show()
 
-'''run_one(
+run_one(
     clean_path="./BSDS300/images/test/37073.jpg",
     ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
     out_dir="./results_IRCNN_sigmamap/SISR_single",
     scale=2,
     sigma_img=0,
     iter_num=24,
-)'''
+)
 
 @torch.no_grad()
 def run_one_metrics_sisr(
@@ -320,7 +320,7 @@ def run_one_metrics_sisr(
         sigma_map = torch.full((B, 1, H, W), sigma_i, device=device, dtype=xk.dtype)
         inp = torch.cat([xk, sigma_map], dim=1)
 
-        z = ircnn_infer(model, inp, modulo=8).clamp(0, 1)
+        z = ircnn_infer(model, inp).clamp(0, 1)
 
     psnr_final = psnr_torch(z.detach().cpu(), x.detach().cpu())
     ssim_final = ssim_torch(z.detach().cpu(), x.detach().cpu())
@@ -418,7 +418,7 @@ def benchmark_sisr_10_random_to_csv(
 
     return df, csv_path
 
-if __name__ == "__main__":
+'''if __name__ == "__main__":
     # benchmark for 10 images
     benchmark_sisr_10_random_to_csv(
         test_dir="./BSDS300/images/test",
@@ -432,4 +432,4 @@ if __name__ == "__main__":
         kernels_mat_path="kernels/kernels_12.mat",
         k_index=2,
         save_examples=False,
-    )
+    )'''
