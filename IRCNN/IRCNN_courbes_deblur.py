@@ -75,9 +75,6 @@ def dpir_hqs_deblur_with_trace(
         # z-step (denoise)
         expert = denoiser.get_expert(sigma_d)
         z = expert.denoise(x).clamp(0, 1)
-        
-        if k in [21, 22, 23]:
-            print(f"Iter {k} | sigma: {sigma_d:.2f}")
 
         # metrics
         Hx = circ_conv_fft(x, otf)

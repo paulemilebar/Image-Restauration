@@ -214,10 +214,10 @@ def dpir_hqs_inpaint(
         csum_z = 0.0
 
     for k in range(iter_num):
-        mu = rhos_t[k].view(1, 1, 1, 1)
+        #mu = rhos_t[k].view(1, 1, 1, 1)
         sigma_k = sigmas[k]
         #print(f"sigma:{sigma_k}")
-        #mu = lambda_pnp/ (sigma_k**2)
+        mu = lambda_pnp/ (sigma_k**2)
         # x-step (fermé pixelwise)
         xk = (M3 * y + mu * z) / (M3 + mu)
         xk = xk.clamp(0, 1)
@@ -228,7 +228,7 @@ def dpir_hqs_inpaint(
             metrics["ssim_x"][k] = ssim_torch(xk, gt)
 
         # z-step
-        sigma_k = float(sigmas[k])
+        sigma_k = float(255.0*sigmas[k])
         z = denoise_sigma_map(model_name, model, xk, sigma=sigma_k)
 
         # enforce known pixels
