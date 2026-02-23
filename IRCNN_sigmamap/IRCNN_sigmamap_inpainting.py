@@ -6,7 +6,6 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 from IRCNN_sigmamap import IRCNNSigmaMap
 from IRCNN_sigmamap_denoise import psnr_torch, ssim_torch, list_images, ircnn_infer
-from IRCNN_sigmamap_super_resolution import save_img01
 import matplotlib.pyplot as plt
 import time
 from glob import glob
@@ -14,6 +13,10 @@ import pandas as pd
 
 
 # Utils
+
+def save_img01(t: torch.Tensor, path: str):
+    TF.to_pil_image(t.squeeze(0).clamp(0, 1).cpu()).save(path)
+    
 def l2norm_flat(x: torch.Tensor) -> torch.Tensor:
     return torch.norm(x.reshape(-1), p=2)
 
@@ -261,7 +264,7 @@ def dpir_hqs_inpaint(
 def run_compare(
     clean_path,
     ircnn_ckpt="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
-    out_dir="./results_IRCNN_sigmamap/inpainting_single",
+    out_dir="./results_IRCNN_sigmamap/inpainting_single_v2",
     missing_ratio=0.15, 
     seed=0,
     iter_num=15,
@@ -338,7 +341,7 @@ def run_compare(
     print(" ", os.path.join(out_dir, "ircnn_cumsum_rel_step.png"))
     
 
-clean_path = "./BSDS300/images/test\87046.jpg"
+clean_path = "./BSDS300/images/test/37073.jpg"
 print("Image choisie:", clean_path)
 run_compare(clean_path=clean_path)
 

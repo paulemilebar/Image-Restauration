@@ -75,6 +75,9 @@ def dpir_hqs_deblur_with_trace(
         # z-step (denoise)
         expert = denoiser.get_expert(sigma_d)
         z = expert.denoise(x).clamp(0, 1)
+        
+        if k in [21, 22, 23]:
+            print(f"Iter {k} | sigma: {sigma_d:.2f}")
 
         # metrics
         Hx = circ_conv_fft(x, otf)
@@ -208,7 +211,7 @@ def test_deblurring_dpir_with_levin09_convergence(
     return logs
 
 logs = test_deblurring_dpir_with_levin09_convergence(
-    clean_path="./BSDS300/images/test/102061.jpg",
+    clean_path="./BSDS300/images/test/37073.jpg",
     ckpt_path="./weights_ircnn",
     levin09_path="kernels/Levin09.npy",
     kernel_index=0,
@@ -220,7 +223,7 @@ logs = test_deblurring_dpir_with_levin09_convergence(
     save_iters=True
 )
 
-def plot_convergence_curves(logs, title="DPIR/HQS convergence", save_dir ="results_IRCNN/deblur_courbes"):
+def plot_convergence_curves(logs, title="DPIR/HQS convergence", save_dir ="results_IRCNN/deblur_courbes_v2"):
     ks = np.array(logs["k"])
     sigma_d = np.array(logs["sigma_d"])
     data_rmse = np.array(logs["data_rmse"])

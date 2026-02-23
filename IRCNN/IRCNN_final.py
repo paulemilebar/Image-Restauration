@@ -106,7 +106,7 @@ class IRCNNModelManager:
     def __init__(self, model_dir, device="cpu"):
         self.model_dir = model_dir
         self.device = device
-        self.available_sigmas = [2*i for i in range(1,26)]
+        self.available_sigmas = [2*i for i in range(1,26)]   #[2*i for i in range(1,4)]+[2*i for i in range(5,26)]
         self.model = IRCNNFixed(n_filters=64).to(device)
         self.current_sigma = None
 
