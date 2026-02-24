@@ -207,20 +207,8 @@ def test_deblurring_dpir_with_levin09_convergence(
 
     return logs
 
-logs = test_deblurring_dpir_with_levin09_convergence(
-    clean_path="./BSDS300/images/test/37073.jpg",
-    ckpt_path="./weights_ircnn",
-    levin09_path="kernels/Levin09.npy",
-    kernel_index=0,
-    sigma_img=5,
-    n_iter=30,
-    lam=0.23,
-    out_dir="results_IRCNN/deblur_courbes",
-    seed=0,
-    save_iters=True
-)
 
-def plot_convergence_curves(logs, title="DPIR/HQS convergence", save_dir ="results_IRCNN/deblur_courbes_v2"):
+def plot_convergence_curves(logs, title="DPIR/HQS convergence", save_dir ="results_IRCNN/deblur_courbes"):
     ks = np.array(logs["k"])
     sigma_d = np.array(logs["sigma_d"])
     data_rmse = np.array(logs["data_rmse"])
@@ -286,4 +274,34 @@ def plot_convergence_curves(logs, title="DPIR/HQS convergence", save_dir ="resul
 
     plt.show()
 
-plot_convergence_curves(logs, save_dir = "results_IRCNN/deblur_courbes")
+# Plane
+logs = test_deblurring_dpir_with_levin09_convergence(
+    clean_path="./BSDS300/images/test/37073.jpg",
+    ckpt_path="./weights_ircnn",
+    levin09_path="kernels/Levin09.npy",
+    kernel_index=0,
+    sigma_img=5,
+    n_iter=30,
+    lam=0.23,
+    out_dir="results_IRCNN/deblur_courbes/plane",
+    seed=0,
+    save_iters=True
+)
+plot_convergence_curves(logs, save_dir = "results_IRCNN/deblur_courbes/plane")
+
+
+# Castel
+'''logs = test_deblurring_dpir_with_levin09_convergence(
+    clean_path="./BSDS300/images/test/102061.jpg",
+    ckpt_path="./weights_ircnn",
+    levin09_path="kernels/Levin09.npy",
+    kernel_index=0,
+    sigma_img=5,
+    n_iter=30,
+    lam=0.23,
+    out_dir="results_IRCNN/deblur_courbes/castel",
+    seed=0,
+    save_iters=True
+)
+plot_convergence_curves(logs, save_dir = "results_IRCNN/deblur_courbes/castel")'''
+

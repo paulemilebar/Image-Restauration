@@ -161,8 +161,8 @@ def test_deblurring_dpir_with_levin09(
     print(f"SSIM blurry/noisy: {ssim_blur:.2f}")
     print(f"SSIM restored    : {ssim_rec:.2f}")
     
-
-test_deblurring_dpir_with_levin09(
+#Plane
+'''test_deblurring_dpir_with_levin09(
     clean_path="./BSDS300/images/test/37073.jpg",
     ckpt_path="./weights_ircnn",
     levin09_path="kernels/Levin09.npy",
@@ -170,9 +170,21 @@ test_deblurring_dpir_with_levin09(
     sigma_img=2.55,
     n_iter=8,
     lam=0.23,
-    out_dir="./results_IRCNN/deblur_single",
- )
+    out_dir="./results_IRCNN/deblur_single/plane",
+ )'''
  
+#Castel
+'''test_deblurring_dpir_with_levin09(
+    clean_path="./BSDS300/images/test/102061.jpg",
+    ckpt_path="./weights_ircnn",
+    levin09_path="kernels/Levin09.npy",
+    kernel_index=0,
+    sigma_img=2.55,
+    n_iter=8,
+    lam=0.23,
+    out_dir="./results_IRCNN/deblur_single/castel",
+ )'''
+
  
 @torch.no_grad()
 def run_deblur_one_return_metrics(
@@ -287,6 +299,7 @@ def benchmark_dpir_deblur_to_csv(
     rows = []
     for i, p in enumerate(chosen):
         # seed différent par image pour le bruit
+        #print(p)
         row = run_deblur_one_return_metrics(
             clean_path=p,
             ckpt_path=ckpt_path,
@@ -301,37 +314,37 @@ def benchmark_dpir_deblur_to_csv(
         )
         rows.append(row)
         print(f"[{i+1}/{n_images}] {row['filename']} | PSNR blurry {row['psnr_blurry_db']:.2f} -> restored {row['psnr_restored_db']:.2f} dB | SSIM blurry {row['ssim_blurry']:.2f} -> restored {row['ssim_restored']:.2f}")
-
+    
     df = pd.DataFrame(rows)
 
-    mean_blur_psnr = df["psnr_blurry_db"].mean()
-    mean_rest_psnr = df["psnr_restored_db"].mean()
-    mean_gain_psnr = df["gain_db"].mean()
-    
-    mean_blur_ssim = df["ssim_blurry"].mean()
-    mean_rest_ssim = df["ssim_restored"].mean()
-    mean_gain_ssim = df["ssim_gain"].mean()
+    metric_cols = [c for c in df.columns if c.startswith("psnr") or c.startswith("gain") or c.startswith("ssim")]
+    mean_row = {"filename": "MEAN"}
+    std_row  = {"filename": "STD"}
+    for c in metric_cols:
+        mean_row[c] = float(df[c].mean())
+        std_row[c]  = float(df[c].std())
+    df2 = pd.concat([df, pd.DataFrame([mean_row, std_row])], ignore_index=True)
 
     csv_path = os.path.join(
         out_dir,
         f"dpir_deblur_benchmark_{n_images}imgs_k{kernel_index}_sig{sigma_img:.2f}_K{n_iter}_lam{lam}_seed{seed}.csv"
     )
-    df.to_csv(csv_path, index=False)
+    df2.to_csv(csv_path, index=False)
 
-    print("\n=== Moyennes (DPIR deblur) ===")
+    '''print("\n=== Moyennes (DPIR deblur) ===")
     print(f"PSNR blurry   : {mean_blur_psnr:.2f} dB")
     print(f"PSNR restored : {mean_rest_psnr:.2f} dB")
     print(f"Gain          : {mean_gain_psnr:.2f} dB")
     print(f"SSIM blurry   : {mean_blur_ssim:.2f}")
     print(f"SSIM restored : {mean_rest_ssim:.2f}")
-    print(f"Gain SSIM       : {mean_gain_ssim:.2f}")
+    print(f"Gain SSIM       : {mean_gain_ssim:.2f}")'''
     print("CSV saved:", csv_path)
 
-    return df, csv_path
+    return df2, csv_path
 
-'''if __name__ == "__main__":
+if __name__ == "__main__":
     benchmark_dpir_deblur_to_csv(
-        test_dir="./BSDS300/images/test",
+        test_dir="./BSDS300/images/images_benchmark/benchmark_10_images",
         ckpt_path="./weights_ircnn",
         levin09_path="kernels/Levin09.npy",
         kernel_index=0,
@@ -340,6 +353,6 @@ def benchmark_dpir_deblur_to_csv(
         lam=0.23,
         n_images=10,
         seed=0,
-        out_dir="./results_IRCNN/deblur_benchmark_v2",
+        out_dir="./results_IRCNN/deblur_benchmark",
         save_examples=False,
-    )'''
+    )
