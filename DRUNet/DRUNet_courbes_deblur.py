@@ -217,14 +217,14 @@ logs = test_deblurring_dpir_with_levin09_convergence(
     levin09_path="kernels/Levin09.npy",
     kernel_index=0,
     sigma_img=5,
-    n_iter=30,
+    n_iter=20,
     lam=0.23,
     out_dir="results_DRUNET/results_DRUNET_deblur_courbes",
     seed=0,
     save_iters=True
 )
 
-def plot_convergence_curves(logs, title="DPIR/HQS convergence", save_dir ="results_DRUNET/results_DRUNET_deblur_courbes"):
+def plot_convergence_curves(logs, title="Convergence deblur DRUNET", save_dir ="results_DRUNET/results_DRUNET_deblur_courbes"):
     ks = np.array(logs["k"])
     sigma_d = np.array(logs["sigma_d"])
     data_rmse = np.array(logs["data_rmse"])

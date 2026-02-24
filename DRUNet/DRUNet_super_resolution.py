@@ -232,11 +232,11 @@ def run_one(
     # ---- plot PSNR curves ----
     it = np.arange(1, iter_num + 1)
     plt.figure()
-    plt.plot(it, psnr_x, label="PSNR(x_k)  (data step)")
-    plt.plot(it, psnr_z, label="PSNR(z_k)  (after DRUNet)")
+    plt.plot(it, psnr_x, label="PSNR(x_k)")
+    plt.plot(it, psnr_z, label="PSNR(z_k)")
     plt.xlabel("Iteration k")
     plt.ylabel("PSNR (dB)")
-    plt.title(f"DPIR SISR PSNR curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
+    plt.title(f"DRUNET SISR PSNR curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
@@ -246,11 +246,11 @@ def run_one(
     # ---- plot SSIM curves ----
     it = np.arange(1, iter_num + 1)
     plt.figure()
-    plt.plot(it, ssim_x, label="SSIM(x_k)  (data step)")
-    plt.plot(it, ssim_z, label="SSIM(z_k)  (after DRUNet)")
+    plt.plot(it, ssim_x, label="SSIM(x_k)")
+    plt.plot(it, ssim_z, label="SSIM(z_k)")
     plt.xlabel("Iteration k")
     plt.ylabel("SSIM")
-    plt.title(f"DPIR SISR SSIM curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
+    plt.title(f"DRUNET SISR SSIM curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
@@ -273,12 +273,6 @@ def run_one_metrics_sisr(
     seed: int = 0,
     save_images: bool = False,
 ):
-    """
-    Même pipeline que run_one, mais:
-      - ne charge pas le modèle (on le réutilise)
-      - retourne PSNR bicubic et PSNR final (z_K)
-      - sauvegarde optionnellement clean/lr/bicubic/restored
-    """
     if out_dir is not None:
         os.makedirs(out_dir, exist_ok=True)
 
@@ -419,42 +413,43 @@ def benchmark_sisr_10_random_to_csv(
         print(f"[{i+1}/{n_images}] {row['filename']} | bic {row['ssim_bicubic']:.2f} -> restored {row['ssim_restored']:.2f}")
     
     df = pd.DataFrame(rows)
+    
+    metric_cols = [c for c in df.columns if c.startswith("psnr") or c.startswith("gain") or c.startswith("ssim")]
+    mean_row = {"filename": "MEAN"}
+    std_row  = {"filename": "STD"}
+    for c in metric_cols:
+        mean_row[c] = float(df[c].mean())
+        std_row[c]  = float(df[c].std())
+    df2 = pd.concat([df, pd.DataFrame([mean_row, std_row])], ignore_index=True)
+    
     csv_path = os.path.join(out_dir, f"sisr_benchmark_{n_images}imgs_sf{scale}_sig{sigma_img}_k{k_index}_K{iter_num}_seed{seed}.csv")
-    df.to_csv(csv_path, index=False)
+    df2.to_csv(csv_path, index=False)
 
-    print("\n=== Moyennes (DPIR SISR) ===")
-    print(f"PSNR bicubic  : {df['psnr_bicubic_db'].mean():.2f} dB")
-    print(f"PSNR restored : {df['psnr_restored_db'].mean():.2f} dB")
-    print(f"Gain          : {df['gain_db'].mean():.2f} dB")
-    print(f"SSIM bicubic  : {df['ssim_bicubic'].mean():.2f} dB")
-    print(f"SSIM restored : {df['ssim_restored'].mean():.2f} dB")
-    print(f"Gain  SSIM        : {df['ssim_gain'].mean():.2f} dB")
-    print("CSV saved:", csv_path)
 
-    return df, csv_path
+    return df2, csv_path
 
 if __name__ == "__main__":
     # test for 1 image
-#    run_one(
-#        clean_path="./BSDS300/images/test/37073.jpg",
-#        ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-#        out_dir="results_DRUNET/results_DRUNET_superresolution",
-#        scale=2,
-#        sigma_img=0,
-#        iter_num=24,
-#    )
-
-    # benchmark for 10 images
-    benchmark_sisr_10_random_to_csv(
-        test_dir="./BSDS300/images/test",
+    run_one(
+        clean_path="./BSDS300/images/test/102061.jpg",
         ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
-        out_dir="results_DRUNET/results_DRUNET_superresolution_benchmark",
-        n_images=10,
-        seed=0,
+        out_dir="results_DRUNET/results_DRUNET_superresolution/castel",
         scale=2,
         sigma_img=0,
-        iter_num=24,
-        kernels_mat_path="kernels/kernels_12.mat",
-        k_index=2,
-        save_examples=False,
+        iter_num=20,
     )
+
+    # benchmark for 10 images
+   # benchmark_sisr_10_random_to_csv(
+   #     test_dir="./BSDS300/images/images_benchmark/benchmark_10_images",
+   #     ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth",
+   #     out_dir="results_DRUNET/results_DRUNET_superresolution_benchmark",
+   #     n_images=10,
+   #     seed=0,
+   #     scale=2,
+   #     sigma_img=0,
+   #     iter_num=20,
+   #     kernels_mat_path="kernels/kernels_12.mat",
+   #     k_index=2,
+   #     save_examples=False,
+   # )

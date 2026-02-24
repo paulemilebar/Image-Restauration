@@ -1,0 +1,20 @@
+PLANE : 
+noisy sigma=20 : 22.21dB and 0.33 SSIM
+denoised sigma=20 : 33.66dB and 0.85 SSIM
+
+noisy sigma=50 : 14.73dB and 0.11 SSIM
+denoised sigma=50 : 29.99dB and 0.77 SSIM
+
+noisy sigma=100 : 10.22 and 0.04 SSIM
+denoised sigma=100 : 26.85dB and 0.68 SSIM
+
+
+CASTEL : 
+noisy sigma=20 : 22.37dB and 0.39 SSIM
+denoised sigma=20 : 32.9 and 0.91 SSIM
+
+noisy sigma=50 : 14.98dB and 0.16 SSIM
+denoised sigma=50 : 28.66dB and 0.84 SSIM
+
+noisy sigma=100 : 10.37 and 0.07 SSIM
+denoised sigma=100 : 25.55dB and 0.76 SSIM

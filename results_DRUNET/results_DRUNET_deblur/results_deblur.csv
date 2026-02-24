@@ -1,0 +1,9 @@
+PLANE : 
+noisy sigma=5 : 25.08dB and 0.52 SSIM
+deblured sigma=5 : 32.73dB and 0.83 SSIM
+
+
+CASTEL : 
+noisy sigma=5 : 22.14 dB and  0.55 SSIM
+deblured sigma=5 : 30.58  and  0.89 SSIM
+

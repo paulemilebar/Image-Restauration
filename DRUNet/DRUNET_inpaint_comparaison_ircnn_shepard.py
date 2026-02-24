@@ -507,9 +507,9 @@ def run_pool_10_images(
 
     df = pd.DataFrame(rows)
 
-    metric_cols = [c for c in df.columns if c.startswith("psnr") or c.startswith("time_") or c.startswith("ssim")]
-    mean_row = {"image": "MEAN"}
-    std_row  = {"image": "STD"}
+    metric_cols = [c for c in df.columns if c.startswith("psnr") or c.startswith("gain") or c.startswith("ssim")]
+    mean_row = {"filename": "MEAN"}
+    std_row  = {"filename": "STD"}
     for c in metric_cols:
         mean_row[c] = float(df[c].mean())
         std_row[c]  = float(df[c].std())
@@ -522,33 +522,33 @@ def run_pool_10_images(
     return df2
 
 
-run_compare(
-        clean_path=r"./BSDS300/images/test/37073.jpg",
-        out_dir="results_DRUNET/results_DRUNET_SHEPARD_inpaint",
+#run_compare(
+ #       clean_path=r"./BSDS300/images/test/102061.jpg",
+ #       out_dir="results_DRUNET/results_DRUNET_SHEPARD_inpaint/castel",
+ #       drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
+ #       missing_ratio=0.33,
+ #       seed=0,
+ #       iter_num=20,
+ #       sigma_obs_pix=2.5,
+ #       modelSigma2_pix=2.55,   
+ #       shepard_window=11,
+ #       shepard_p=2.0,
+ #   )
+    
+    
+df = run_pool_10_images(
+        clean_dir=r"./BSDS300/images/images_benchmark/benchmark_10_images",
+        out_root="results_DRUNET/results_DRUNET_inpaint_benchmark",
         drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
-        missing_ratio=0.45,
+        n_images=10,
         seed=0,
+        missing_ratio=0.2,
         iter_num=20,
-        sigma_obs_pix=5.0,
-        modelSigma2_pix=2.55,   
-        shepard_window=11,
+        sigma_obs_pix=2.5,
+        modelSigma2_pix=2.55,
+        shepard_window=21,
         shepard_p=2.0,
+        save_outputs_per_image=False,
+        save_convergence=False,
+        csv_name="pool10_metrics.csv"
     )
-    
-    
-#df = run_pool_10_images(
-#        clean_dir=r"./BSDS300/images/test",
-#        out_root="results_DRUNET/results_DRUNET_inpaint_benchmark",
-#        drunet_ckpt=r"./weights_drunet_sigmap/drunet_sigmap_final.pth",
-#        n_images=10,
-#        seed=0,
-#        missing_ratio=0.42,
-#        iter_num=20,
-#        sigma_obs_pix=5.0,
-#        modelSigma2_pix=2.55,
-#        shepard_window=21,
-#        shepard_p=2.0,
-#        save_outputs_per_image=False,
-#        save_convergence=False,
-#        csv_name="pool10_metrics.csv"
-#    )

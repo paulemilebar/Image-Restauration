@@ -181,17 +181,18 @@ def benchmark_drunet_random(
             TF.to_pil_image(den.squeeze(0)).save(os.path.join(out_dir, f"{base}_den_sigma{int(sigma)}.png"))
 
     df = pd.DataFrame(rows)
-
-    mean_noisy_psnr = df["psnr_noisy_db"].mean()
-    mean_den_psnr = df["psnr_denoised_db"].mean()
-    mean_gain_psnr = df["gain_db"].mean()
     
-    mean_noisy_ssim = df["ssim_noisy"].mean()
-    mean_den_ssim = df["ssim_denoised"].mean()
-    mean_gain_ssim = df["gain_ssim"].mean()
+    metric_cols = [c for c in df.columns if c.startswith("psnr") or c.startswith("gain") or c.startswith("ssim")]
+    mean_row = {"filename": "MEAN"}
+    std_row  = {"filename": "STD"}
+    for c in metric_cols:
+        mean_row[c] = float(df[c].mean())
+        std_row[c]  = float(df[c].std())
+    df2 = pd.concat([df, pd.DataFrame([mean_row, std_row])], ignore_index=True)
+
 
     csv_path = os.path.join(out_dir, f"drunet_benchmark_{n_images}imgs_sigma{int(sigma)}_seed{seed}.csv")
-    df.to_csv(csv_path, index=False)
+    df2.to_csv(csv_path, index=False)
 
     print("\n=== Résultats DRUNet (benchmark random) ===")
     print(f"test_dir : {test_dir}")
@@ -200,26 +201,20 @@ def benchmark_drunet_random(
     print(f"seed     : {seed}")
     print(f"CSV saved: {csv_path}")
 
-    print("\nMoyennes:")
-    print(f"  PSNR noisy    : {mean_noisy_psnr:.2f} dB")
-    print(f"  PSNR denoised : {mean_den_psnr:.2f} dB")
-    print(f"  Gain PSNR         : {mean_gain_psnr:.2f} dB")
-    
-    print(f"  SSIM noisy    : {mean_noisy_ssim:.2f}")
-    print(f"  SSIM denoised : {mean_den_ssim:.2f}")
-    print(f"  Gain SSIM         : {mean_gain_ssim:.2f}")
 
     show_cols = ["idx", "filename", "sigma", "psnr_noisy_db", "psnr_denoised_db", "gain_db", "ssim_noisy", "ssim_denoised", "gain_ssim"]
+    
+    
     print("\nTableau (par image):")
-    print(df[show_cols].to_string(index=False, justify="left", float_format=lambda x: f"{x:0.2f}"))
+    print(df2[show_cols].to_string(index=False, justify="left", float_format=lambda x: f"{x:0.2f}"))
 
-    return df
+    return df2
 
 
 if __name__ == "__main__":
     # 1) One image (qualitative + PSNR + saves)
-    run_single_image_demo(clean_path="./BSDS300/images/test/37073.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_single", sigma=150.0, seed=0)
+    run_single_image_demo(clean_path="./BSDS300/images/test/102061.jpg", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_single/castel", sigma=20.0, seed=0)
 
     # 2) Benchmark N images (table + CSV)
-    #benchmark_drunet_random(test_dir="./BSDS300/images/test", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_benchmark", sigma=20.0, n_images=10, seed=0, save_examples=False)
+    #benchmark_drunet_random(test_dir="./BSDS300/images/images_benchmark/benchmark_10_images", ckpt_path="./weights_drunet_sigmap/drunet_sigmap_final.pth", out_dir="results_DRUNET/results_DRUNET_denoise_benchmark", sigma=25.0, n_images=10, seed=0, save_examples=False)
 
