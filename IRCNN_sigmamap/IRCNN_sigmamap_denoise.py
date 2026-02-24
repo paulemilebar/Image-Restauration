@@ -102,9 +102,13 @@ def run_single_image_demo(
 
 
 
-'''run_single_image_demo(
-    clean_path=r"./BSDS300/images/test/37073.jpg",
-    sigma=50
+# Plane
+'''image_path =  "./BSDS300/images/test/102061.jpg"
+run_single_image_demo(
+    clean_path=image_path,
+    ckpt_path = "./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
+    out_dir = "./results_IRCNN_sigmamap/denoise_single/castel",
+    sigma=100.0
 )'''
 
 
@@ -124,20 +128,13 @@ def benchmark_ircnn_sigmap(
     """
     os.makedirs(out_dir, exist_ok=True)
     model, device = load_ircnn(ckpt_path)
-
-    '''all_paths = list_images(test_dir)
-    if len(all_paths) == 0:
-        raise RuntimeError(f"Aucune image trouvée dans {test_dir}")
-    if len(all_paths) < n_images:
-        raise RuntimeError(f"Pas assez d'images: {len(all_paths)} < {n_images}")
-
-    rng = random.Random(seed)
-    chosen = rng.sample(all_paths, n_images)'''
-    
-    chosen = list_images("./BSDS300/images/images_benchmark/benchmark_10_images")
-    #print(chosen)
+    valid_extensions = ('.png', '.jpg', '.jpeg', '.bmp', '.tif')
+    images = [
+        os.path.join(test_dir, f) for f in os.listdir(test_dir) 
+        if f.lower().endswith(valid_extensions) and os.path.isfile(os.path.join(test_dir, f))
+    ]
     rows = []
-    for i, path in enumerate(chosen):
+    for i, path in enumerate(images):
         #print(path)
         clean_pil = Image.open(path).convert("RGB")
         clean = TF.to_tensor(clean_pil).unsqueeze(0)  # (1,3,H,W)
@@ -172,7 +169,13 @@ def benchmark_ircnn_sigmap(
             TF.to_pil_image(den.squeeze(0)).save(os.path.join(out_dir, f"{base}_den_sigma{int(sigma)}.png"))
 
     df = pd.DataFrame(rows)
-
+    metric_cols = [c for c in df.columns if c.startswith("psnr") or c.startswith("gain") or c.startswith("ssim")]
+    mean_row = {"filename": "MEAN"}
+    std_row  = {"filename": "STD"}
+    for c in metric_cols:
+        mean_row[c] = float(df[c].mean())
+        std_row[c]  = float(df[c].std())
+    df2 = pd.concat([df, pd.DataFrame([mean_row, std_row])], ignore_index=True)
     mean_noisy_psnr = df["psnr_noisy_db"].mean()
     mean_den_psnr = df["psnr_denoised_db"].mean()
     mean_gain_psnr = df["gain_db"].mean()
@@ -182,7 +185,7 @@ def benchmark_ircnn_sigmap(
     mean_gain_ssim = df["gain_ssim"].mean()
 
     csv_path = os.path.join(out_dir, f"ircnn_benchmark_{n_images}imgs_sigma{int(sigma)}_seed{seed}.csv")
-    df.to_csv(csv_path, index=False)
+    df2.to_csv(csv_path, index=False)
 
     print("\n=== Résultats IRCNN (benchmark random) ===")
     print(f"test_dir : {test_dir}")
@@ -202,11 +205,11 @@ def benchmark_ircnn_sigmap(
 
     show_cols = ["idx", "filename", "sigma", "psnr_noisy_db", "psnr_denoised_db", "gain_db", "ssim_noisy", "ssim_denoised", "gain_ssim"]
     print("\nTableau (par image):")
-    print(df[show_cols].to_string(index=False, justify="left", float_format=lambda x: f"{x:0.2f}"))
+    print(df2[show_cols].to_string(index=False, justify="left", float_format=lambda x: f"{x:0.2f}"))
 
-    return df
+    return df2
 
 
-if __name__ == "__main__":
-    benchmark_ircnn_sigmap(test_dir="./BSDS300/images/test", ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth", out_dir="results_IRCNN_sigmamap/denoise_benchmark_v2", sigma=20.0, n_images=10, seed=0, save_examples=False)
+'''if __name__ == "__main__":
+    benchmark_ircnn_sigmap(test_dir="./BSDS300/images/images_benchmark/benchmark_10_images", ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth", out_dir="results_IRCNN_sigmamap/denoise_benchmark", sigma=25.0, n_images=10, seed=0, save_examples=False)'''
 

@@ -147,7 +147,7 @@ def shepard_initialize_rgb(y01: torch.Tensor, M01: torch.Tensor, window: int = 9
     return z0.clamp(0, 1)
 
 
-def get_rho_sigma_dpir(sigma_obs=2.55/255, iter_num=15, modelSigma2=2.55):
+def get_rho_sigma(sigma_obs=2.55/255, iter_num=15, modelSigma2=2.55):
     modelSigma1 = 49.0
     modelSigmaS = np.logspace(np.log10(modelSigma1), np.log10(modelSigma2), iter_num).astype(np.float32)
     sigmas = modelSigmaS / 255.0
@@ -162,9 +162,9 @@ def denoise_sigma_map(model_name: str, model, x3: torch.Tensor, sigma: float):
     inp4 = torch.cat([x3, sigma_map], dim=1)
     return ircnn_infer(model, inp4).clamp(0, 1)
 
-# DPIR-style PnP-HQS Inpainting
+# PnP-HQS Inpainting
 @torch.no_grad()
-def dpir_hqs_inpaint(
+def hqs_inpaint(
     y: torch.Tensor,     # (1,3,H,W) masked observation (trous=0)
     M: torch.Tensor,     # (1,1,H,W) 1 connu / 0 manquant
     model_name: str,
@@ -183,9 +183,8 @@ def dpir_hqs_inpaint(
     device = y.device
     M3 = M.repeat(1, 3, 1, 1)
 
-    # schedule (DPIR)
     sigma_obs = float(sigma_obs_pix) / 255.0
-    rhos, sigmas = get_rho_sigma_dpir(sigma_obs=sigma_obs, iter_num=iter_num, modelSigma2=modelSigma2_pix)
+    rhos, sigmas = get_rho_sigma(sigma_obs=sigma_obs, iter_num=iter_num, modelSigma2=modelSigma2_pix)
     rhos_t = torch.tensor(rhos, device=device, dtype=y.dtype)
 
     # init Shepard
@@ -302,14 +301,14 @@ def run_compare(
     ircnn.load_state_dict(sd, strict=True)
 
     # IRCNN+
-    rec_d, metrics_d = dpir_hqs_inpaint(
+    rec_d, metrics_d = hqs_inpaint(
         y=y, M=M, model_name="ircnn", model=ircnn,
         iter_num=iter_num, lambda_pnp=lambda_pnp, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
         shepard_window=shepard_window, shepard_p=shepard_p, seed=seed,
         track_convergence=True, gt=gt
     )
 
-    save_img01(rec_d, os.path.join(out_dir, "restored_dpir_hqs_ircnn.png"))
+    save_img01(rec_d, os.path.join(out_dir, "restored_hqs_ircnn.png"))
     save_convergence_plots(metrics_d, out_dir=out_dir, prefix="ircnn")
 
     miss = (1.0 - M3)
@@ -323,16 +322,16 @@ def run_compare(
     print("PSNR global:")
     print("  input        :", f"{psnr_torch(y, gt):.2f} dB")
     print("  shepard-only :", f"{psnr_torch(rec_sh, gt):.2f} dB")
-    print("  DPIR - IRCNN+:", f"{psnr_torch(rec_d, gt):.2f} dB")
+    print("  IRCNN+:", f"{psnr_torch(rec_d, gt):.2f} dB")
     print("SSIM global:")
     print("  input        :", f"{ssim_torch(y, gt):.2f}")
     print("  shepard-only :", f"{ssim_torch(rec_sh, gt):.2f}")
-    print("  DPIR - IRCNN+:", f"{ssim_torch(rec_d, gt):.2f}")
+    print("  IRCNN+:", f"{ssim_torch(rec_d, gt):.2f}")
     
     print("PSNR missing:")
     print("  input        :", f"{psnr_on_missing(y,      gt, miss):.2f} dB")
     print("  shepard-only :", f"{psnr_on_missing(rec_sh, gt, miss):.2f} dB")
-    print("  DPIR - IRCNN+:", f"{psnr_on_missing(rec_d,  gt, miss):.2f} dB")
+    print("  IRCNN+:", f"{psnr_on_missing(rec_d,  gt, miss):.2f} dB")
     
     print("Convergence plots saved:")
     print(" ", os.path.join(out_dir, "ircnn_psnr_xk.png"))
@@ -341,9 +340,20 @@ def run_compare(
     print(" ", os.path.join(out_dir, "ircnn_cumsum_rel_step.png"))
     
 
+#castel
 clean_path = "./BSDS300/images/test/37073.jpg"
 print("Image choisie:", clean_path)
-run_compare(clean_path=clean_path)
+run_compare(
+    clean_path = clean_path,
+    ircnn_ckpt="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
+    out_dir="./results_IRCNN_sigmamap/inpainting_single/plane",
+    missing_ratio=0.33, 
+    seed=0,
+    iter_num=20,
+    lambda_pnp=3,
+    sigma_obs_pix=0,
+    shepard_window=11
+)
 
 
 @torch.no_grad()
@@ -381,9 +391,9 @@ def run_compare_return_metrics(
     rec_sh = shepard_initialize_rgb(y, M, window=int(shepard_window), p=shepard_p).to(device=device, dtype=gt.dtype)
     rec_sh = (M3 * y + (1.0 - M3) * rec_sh).clamp(0, 1)
 
-    # DPIR-HQS
+    # HQS
     t0 = time.perf_counter()
-    out = dpir_hqs_inpaint(
+    out = hqs_inpaint(
     y=y, M=M, model_name="ircnn", model=ircnn,
     iter_num=iter_num, lambda_pnp=lambda_pnp, sigma_obs_pix=sigma_obs_pix, modelSigma2_pix=modelSigma2_pix,
     shepard_window=int(shepard_window), shepard_p=shepard_p, seed=seed,
@@ -416,13 +426,13 @@ def run_compare_return_metrics(
         "shepard_window": int(shepard_window),
         "psnr_input": psnr_torch(y, gt),
         "psnr_shepard": psnr_torch(rec_sh, gt),
-        "psnr_dpir_ircnn": psnr_torch(rec_d, gt),
+        "psnr_ircnn": psnr_torch(rec_d, gt),
         "ssim_input": ssim_torch(y, gt),
         "ssim_shepard": ssim_torch(rec_sh, gt),
-        "ssim_dpir_ircnn": ssim_torch(rec_d, gt),
+        "ssim_ircnn": ssim_torch(rec_d, gt),
         "psnr_miss_input": psnr_on_missing(y, gt, miss),
         "psnr_miss_shepard": psnr_on_missing(rec_sh, gt, miss),
-        "psnr_miss_dpir_ircnn": psnr_on_missing(rec_d, gt, miss),
+        "psnr_miss_ircnn": psnr_on_missing(rec_d, gt, miss),
         "time_ircnn_s": t_d,
     }
 
@@ -431,7 +441,7 @@ def run_compare_return_metrics(
         save_img01(M3, os.path.join(out_dir, "mask.png"))
         save_img01(y,  os.path.join(out_dir, "masked_noisy.png"))
         save_img01(rec_sh, os.path.join(out_dir, "restored_shepard_only.png"))
-        save_img01(rec_d,  os.path.join(out_dir, "restored_dpir_hqs_ircnnt.png"))
+        save_img01(rec_d,  os.path.join(out_dir, "restored_hqs_ircnnt.png"))
 
         if save_convergence and (metrics_d is not None):
             save_convergence_plots(metrics_d, out_dir=out_dir, prefix="ircnn")
@@ -528,17 +538,17 @@ def run_pool_10_images(
    
     
 '''df = run_pool_10_images(
-        clean_dir=r"./BSDS300/images/test",
+        clean_dir="./BSDS300/images/images_benchmark/benchmark_10_images",
         out_root="./results_IRCNN_sigmamap/inpainting_benchmark",
-        ircnn_ckpt=r"./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
+        ircnn_ckpt="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
         n_images=10,
         seed=0,
-        missing_ratio=0.42,
+        missing_ratio=0.2,
         iter_num=20,
         lambda_pnp=0.23,
-        sigma_obs_pix=5.0,
+        sigma_obs_pix=2.5,
         modelSigma2_pix=2.55,
-        shepard_window=21,
+        shepard_window=11,
         shepard_p=2.0,
         save_outputs_per_image=False,
         save_convergence=False,

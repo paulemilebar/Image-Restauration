@@ -13,7 +13,7 @@ def _rmse(a: torch.Tensor) -> float:
     return float(torch.sqrt(torch.mean(a**2)).item())
 
 @torch.no_grad()
-def dpir_hqs_deblur_with_trace(
+def hqs_deblur_with_trace(
     y: torch.Tensor,                 # (B,3,H,W) in [0,1]
     otf: torch.Tensor,               # (H,W) complex
     denoiser: torch.nn.Module,       # IRCNNSigmaMap
@@ -126,7 +126,7 @@ def print_logs_table(logs):
 
 
 @torch.no_grad()
-def test_deblurring_dpir_with_levin09_convergence(
+def test_deblurring_with_levin09_convergence(
     clean_path: str,
     ckpt_path: str,
     levin09_path: str = "kernels/Levin09.npy",
@@ -134,7 +134,7 @@ def test_deblurring_dpir_with_levin09_convergence(
     sigma_img: float = 2.55,
     n_iter: int = 8,
     lam: float = 0.23,
-    out_dir: str = "test_outputs_dpir_deblur_conv",
+    out_dir: str = "test_outputs_deblur_conv",
     seed: int = 0,
     save_iters: bool = True,
 ):
@@ -171,9 +171,8 @@ def test_deblurring_dpir_with_levin09_convergence(
 
     y = (blurry + noise).clamp(0.0, 1.0)
 
-    # run DPIR + trace
     it_dir = os.path.join(out_dir, "iters") if save_iters else None
-    x_hat, logs = dpir_hqs_deblur_with_trace(
+    x_hat, logs = hqs_deblur_with_trace(
         y=y, otf=otf, denoiser=model,
         sigma_img=sigma_img, lam=lam, n_iter=n_iter, sigma_max=49.0,
         x_gt=x,
@@ -210,20 +209,7 @@ def test_deblurring_dpir_with_levin09_convergence(
 
     return logs
 
-logs = test_deblurring_dpir_with_levin09_convergence(
-    clean_path="./BSDS300/images/test/102061.jpg",
-    ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
-    levin09_path="kernels/Levin09.npy",
-    kernel_index=0,
-    sigma_img=5,
-    n_iter=30,
-    lam=0.23,
-    out_dir="results_IRCNN_sigmamap/deblur_courbes",
-    seed=0,
-    save_iters=True
-)
-
-def plot_convergence_curves(logs, title="DPIR/HQS convergence", save_dir ="results_IRCNN_sigmamap/deblur_courbes"):
+def plot_convergence_curves(logs, title="Convergence Deblur IRCNN+", save_dir ="results_IRCNN_sigmamap/deblur_courbes"):
     ks = np.array(logs["k"])
     sigma_d = np.array(logs["sigma_d"])
     data_rmse = np.array(logs["data_rmse"])
@@ -289,4 +275,32 @@ def plot_convergence_curves(logs, title="DPIR/HQS convergence", save_dir ="resul
 
     plt.show()
 
-plot_convergence_curves(logs, save_dir = "results_IRCNN_sigmamap/deblur_courbes")
+# Castel
+'''logs = test_deblurring_with_levin09_convergence(
+    clean_path="./BSDS300/images/test/102061.jpg",
+    ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
+    levin09_path="kernels/Levin09.npy",
+    kernel_index=0,
+    sigma_img=5,
+    n_iter=20,
+    lam=0.23,
+    out_dir="results_IRCNN_sigmamap/deblur_single/castel",
+    seed=0,
+    save_iters=True
+)
+plot_convergence_curves(logs, save_dir = "results_IRCNN_sigmamap/deblur_single/castel")'''
+
+# Plane
+'''logs = test_deblurring_with_levin09_convergence(
+    clean_path="./BSDS300/images/test/37073.jpg",
+    ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
+    levin09_path="kernels/Levin09.npy",
+    kernel_index=0,
+    sigma_img=5,
+    n_iter=20,
+    lam=0.23,
+    out_dir="results_IRCNN_sigmamap/deblur_single/plane",
+    seed=0,
+    save_iters=True
+)
+plot_convergence_curves(logs, save_dir = "results_IRCNN_sigmamap/deblur_single/plane")'''

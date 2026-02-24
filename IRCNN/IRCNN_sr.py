@@ -27,7 +27,7 @@ def load_kernel12(path="kernels/kernels_12.mat", k_index=0) -> np.ndarray:
     k /= k.sum()
     return k
 
-# DPIR SISR closed-form (Eq. 14)
+# SISR closed-form (Eq. 14)
 def splits(a: torch.Tensor, sf: int) -> torch.Tensor:
     # a: N x C x H x W -> N x C x (H/sf) x (W/sf) x (sf^2)
     # sf: scale factor
@@ -65,7 +65,7 @@ def pre_calculate(img_L: torch.Tensor, k: torch.Tensor, sf: int):
 
 def data_solution_closed_form(z_prev, FB, FBC, F2B, FBFy, alpha, sf):
     """
-    closed-form x-step (Eq.14) as implemented in DPIR utils_sisr.data_solution
+    closed-form x-step (Eq.14) as implemented in utils_sisr.data_solution
     """
     FR = FBFy + torch.fft.fftn(alpha * z_prev, dim=(-2, -1))
     x1 = FB.mul(FR)
@@ -111,7 +111,7 @@ def get_rho_sigma(noise_level_model: float, iter_num: int, modelSigma1: float, m
 
 
 
-# Main DPIR SISR (minimal outputs + PSNR plot)
+# Main SISR (minimal outputs + PSNR plot)
 @torch.no_grad()
 def run_one(
     clean_path: str,
@@ -163,7 +163,7 @@ def run_one(
     save_img01(x, os.path.join(out_dir, "clean.png"))
     save_img01(y, os.path.join(out_dir, "lr.png"))
 
-    # ---- DPIR params (K=24, sigma_K=max(sigma,s)) ----
+    # ---- params (K=24, sigma_K=max(sigma,s)) ----
     noise_level_model = sigma_n
     modelSigma2 = max(float(scale), float(noise_level_model * 255.0))
     rhos, sigmas = get_rho_sigma(noise_level_model, iter_num, modelSigma1, modelSigma2, w=1.0)
@@ -217,11 +217,11 @@ def run_one(
     # ---- plot PSNR curves ----
     it = np.arange(1, iter_num + 1)
     plt.figure()
-    plt.plot(it, psnr_x, label="PSNR(x_k)  (data step)")
-    plt.plot(it, psnr_z, label="PSNR(z_k)  (after IRCNN)")
+    plt.plot(it, psnr_x, label="PSNR(x_k)")
+    plt.plot(it, psnr_z, label="PSNR(z_k)")
     plt.xlabel("Iteration k")
     plt.ylabel("PSNR (dB)")
-    plt.title(f"DPIR SISR PSNR curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
+    plt.title(f"SISR PSNR curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
@@ -231,11 +231,11 @@ def run_one(
     # ---- plot SSIM curves ----
     it = np.arange(1, iter_num + 1)
     plt.figure()
-    plt.plot(it, ssim_x, label="SSIM(x_k)  (data step)")
-    plt.plot(it, ssim_z, label="SSIM(z_k)  (after IRCNN)")
+    plt.plot(it, ssim_x, label="SSIM(x_k)")
+    plt.plot(it, ssim_z, label="SSIM(z_k)")
     plt.xlabel("Iteration k")
     plt.ylabel("SSIM")
-    plt.title(f"DPIR SISR SSIM curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
+    plt.title(f"SISR SSIM curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
@@ -243,13 +243,14 @@ def run_one(
     plt.show()
 
 
+# Castel
 '''run_one(
-    clean_path="./BSDS300/images/test/37073.jpg",
+    clean_path="./BSDS300/images/test/102061.jpg",
     ckpt_path="./weights_ircnn",
-    out_dir="results_IRCNN/SISR_single",
+    out_dir="results_IRCNN/SISR_single/castel",
     scale=2,
     sigma_img=0,
-    iter_num=24,
+    iter_num=20,
 )'''
 
 
@@ -310,7 +311,7 @@ def run_one_metrics_sisr(
     psnr_bic = psnr_torch(z.detach().cpu(), x.detach().cpu())
     ssim_bic = ssim_torch(z.detach().cpu(), x.detach().cpu())
 
-    # ---- DPIR params ----
+    # ---- params ----
     noise_level_model = sigma_n
     modelSigma2 = max(float(scale), float(noise_level_model * 255.0))
     rhos, sigmas = get_rho_sigma(noise_level_model, iter_num, modelSigma1, modelSigma2, w=1.0)
@@ -374,7 +375,7 @@ def benchmark_sisr_10_random_to_csv(
     save_examples: bool = False,
 ):
     """
-    Pick 10 random test images, run DPIR-SISR, write CSV and print means.
+    Pick 10 random test images, run SISR, write CSV and print means.
     """
     os.makedirs(out_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -386,11 +387,8 @@ def benchmark_sisr_10_random_to_csv(
     if len(all_paths) < n_images:
         raise RuntimeError(f"Pas assez d'images dans {test_dir}: {len(all_paths)} < {n_images}")
 
-    rng = random.Random(seed)
-    chosen = rng.sample(all_paths, n_images)
-
     rows = []
-    for i, p in enumerate(chosen):
+    for i, p in enumerate(all_paths):
         row = run_one_metrics_sisr(
             clean_path=p,
             model=model,
@@ -410,31 +408,30 @@ def benchmark_sisr_10_random_to_csv(
         print(f"[{i+1}/{n_images}] {row['filename']} | bic {row['ssim_bicubic']:.2f} -> restored {row['ssim_restored']:.2f}")
     
     df = pd.DataFrame(rows)
+    metric_cols = [c for c in df.columns if c.startswith("psnr") or c.startswith("gain") or c.startswith("ssim")]
+    mean_row = {"filename": "MEAN"}
+    std_row  = {"filename": "STD"}
+    for c in metric_cols:
+        mean_row[c] = float(df[c].mean())
+        std_row[c]  = float(df[c].std())
+    df2 = pd.concat([df, pd.DataFrame([mean_row, std_row])], ignore_index=True)
+
     csv_path = os.path.join(out_dir, f"sisr_benchmark_{n_images}imgs_sf{scale}_sig{sigma_img}_k{k_index}_K{iter_num}_seed{seed}.csv")
-    df.to_csv(csv_path, index=False)
+    df2.to_csv(csv_path, index=False)
 
-    print("\n=== Moyennes (DPIR SISR) ===")
-    print(f"PSNR bicubic  : {df['psnr_bicubic_db'].mean():.2f} dB")
-    print(f"PSNR restored : {df['psnr_restored_db'].mean():.2f} dB")
-    print(f"Gain          : {df['gain_db'].mean():.2f} dB")
-    print(f"SSIM bicubic  : {df['ssim_bicubic'].mean():.2f} dB")
-    print(f"SSIM restored : {df['ssim_restored'].mean():.2f} dB")
-    print(f"Gain  SSIM    : {df['ssim_gain'].mean():.2f} dB")
-    print("CSV saved:", csv_path)
+    return df2, csv_path
 
-    return df, csv_path
-
-if __name__ == "__main__":
+'''if __name__ == "__main__":
     benchmark_sisr_10_random_to_csv(
-        test_dir="./BSDS300/images/test",
+        test_dir="./BSDS300/images/images_benchmark/benchmark_10_images",
         ckpt_path="./weights_ircnn",
         out_dir="./results_IRCNN/SISR_benchmark",
         n_images=10,
         seed=0,
         scale=2,
-        sigma_img=0,
-        iter_num=24,
+        sigma_img=2.5,
+        iter_num=20,
         kernels_mat_path="kernels/kernels_12.mat",
         k_index=2,
         save_examples=False,
-    )
+    )'''

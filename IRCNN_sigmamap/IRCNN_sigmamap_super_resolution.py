@@ -27,7 +27,7 @@ def load_kernel12(path="kernels/kernels_12.mat", k_index=0) -> np.ndarray:
     k /= k.sum()
     return k
 
-# DPIR SISR closed-form (Eq. 14)
+# SISR closed-form (Eq. 14)
 def splits(a: torch.Tensor, sf: int) -> torch.Tensor:
     '''a: N x C x H x W -> N x C x (H/sf) x (W/sf) x (sf^2)
     sf: scale factor'''
@@ -160,7 +160,7 @@ def run_one(
     save_img01(x, os.path.join(out_dir, "clean.png"))
     save_img01(y, os.path.join(out_dir, "lr.png"))
 
-    # DPIR params
+    # params
     noise_level_model = sigma_n
     modelSigma2 = max(float(scale), float(noise_level_model * 255.0))
     rhos, sigmas = get_rho_sigma(noise_level_model, iter_num, modelSigma1, modelSigma2, w=1.0)
@@ -220,7 +220,7 @@ def run_one(
     plt.plot(it, psnr_z, label="PSNR(z_k)  (after IRCNN+)")
     plt.xlabel("Iteration k")
     plt.ylabel("PSNR (dB)")
-    plt.title(f"DPIR SISR PSNR curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
+    plt.title(f"SISR PSNR curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
@@ -234,21 +234,22 @@ def run_one(
     plt.plot(it, ssim_z, label="SSIM(z_k)  (after IRCNN+)")
     plt.xlabel("Iteration k")
     plt.ylabel("SSIM")
-    plt.title(f"DPIR SISR SSIM curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
+    plt.title(f"SISR SSIM curves (sf={scale}, sigma={sigma_img}, k_index={k_index})")
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "ssim_curves.png"), dpi=200)
     plt.show()
 
-run_one(
-    clean_path="./BSDS300/images/test/37073.jpg",
+#castel
+'''run_one(
+    clean_path="./BSDS300/images/test/102061.jpg",
     ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
-    out_dir="./results_IRCNN_sigmamap/SISR_single",
+    out_dir="./results_IRCNN_sigmamap/SISR_single/castel",
     scale=2,
     sigma_img=0,
-    iter_num=24,
-)
+    iter_num=20,
+)'''
 
 @torch.no_grad()
 def run_one_metrics_sisr(
@@ -301,7 +302,7 @@ def run_one_metrics_sisr(
     psnr_bic = psnr_torch(z.detach().cpu(), x.detach().cpu())
     ssim_bic = ssim_torch(z.detach().cpu(), x.detach().cpu())
 
-    # DPIR params
+    # params
     noise_level_model = sigma_n
     modelSigma2 = max(float(scale), float(noise_level_model * 255.0))
     rhos, sigmas = get_rho_sigma(noise_level_model, iter_num, modelSigma1, modelSigma2, w=1.0)
@@ -366,7 +367,7 @@ def benchmark_sisr_10_random_to_csv(
     save_examples: bool = False,
 ):
     """
-    Pick 10 random test images, run DPIR-SISR, write CSV and print means.
+    Pick 10 random test images, run SISR, write CSV and print means.
     """
     os.makedirs(out_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -404,31 +405,30 @@ def benchmark_sisr_10_random_to_csv(
         print(f"[{i+1}/{n_images}] {row['filename']} | bic {row['ssim_bicubic']:.2f} -> restored {row['ssim_restored']:.2f}")
     
     df = pd.DataFrame(rows)
+    metric_cols = [c for c in df.columns if c.startswith("psnr") or c.startswith("gain") or c.startswith("ssim")]
+    mean_row = {"filename": "MEAN"}
+    std_row  = {"filename": "STD"}
+    for c in metric_cols:
+        mean_row[c] = float(df[c].mean())
+        std_row[c]  = float(df[c].std())
+    df2 = pd.concat([df, pd.DataFrame([mean_row, std_row])], ignore_index=True)
+
     csv_path = os.path.join(out_dir, f"sisr_benchmark_{n_images}imgs_sf{scale}_sig{sigma_img}_k{k_index}_K{iter_num}_seed{seed}.csv")
-    df.to_csv(csv_path, index=False)
+    df2.to_csv(csv_path, index=False)
 
-    print("\n=== Moyennes (DPIR SISR) ===")
-    print(f"PSNR bicubic  : {df['psnr_bicubic_db'].mean():.2f} dB")
-    print(f"PSNR restored : {df['psnr_restored_db'].mean():.2f} dB")
-    print(f"Gain          : {df['gain_db'].mean():.2f} dB")
-    print(f"SSIM bicubic  : {df['ssim_bicubic'].mean():.2f} dB")
-    print(f"SSIM restored : {df['ssim_restored'].mean():.2f} dB")
-    print(f"Gain  SSIM        : {df['ssim_gain'].mean():.2f} dB")
-    print("CSV saved:", csv_path)
+    return df2, csv_path
 
-    return df, csv_path
-
-'''if __name__ == "__main__":
+if __name__ == "__main__":
     # benchmark for 10 images
-    benchmark_sisr_10_random_to_csv(
-        test_dir="./BSDS300/images/test",
+    '''benchmark_sisr_10_random_to_csv(
+        test_dir="./BSDS300/images/images_benchmark/benchmark_10_images",
         ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
         out_dir="./results_IRCNN_sigmamap/SISR_benchmark",
         n_images=10,
         seed=0,
         scale=2,
         sigma_img=0,
-        iter_num=24,
+        iter_num=20,
         kernels_mat_path="kernels/kernels_12.mat",
         k_index=2,
         save_examples=False,
