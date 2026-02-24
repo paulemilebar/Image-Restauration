@@ -1,0 +1,17 @@
+Sigma=20
+PSNR noisy   : 22.21 dB
+PSNR denoised: 31.20 dB
+SSIM noisy   : 0.33
+SSIM denoised: 0.82
+
+Sigma=50
+PSNR noisy   : 14.73 dB
+PSNR denoised: 24.37 dB
+SSIM noisy   : 0.11
+SSIM denoised: 0.53
+
+Sigma=100
+PSNR noisy   : 10.22 dB
+PSNR denoised: 15.87 dB
+SSIM noisy   : 0.04
+SSIM denoised: 0.13

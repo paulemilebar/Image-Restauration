@@ -342,17 +342,17 @@ def benchmark_dpir_deblur_to_csv(
 
     return df2, csv_path
 
-if __name__ == "__main__":
+'''if __name__ == "__main__":
     benchmark_dpir_deblur_to_csv(
         test_dir="./BSDS300/images/images_benchmark/benchmark_10_images",
         ckpt_path="./weights_ircnn",
         levin09_path="kernels/Levin09.npy",
         kernel_index=0,
-        sigma_img=2.55,
-        n_iter=30,
+        sigma_img=5,
+        n_iter=20,
         lam=0.23,
         n_images=10,
         seed=0,
         out_dir="./results_IRCNN/deblur_benchmark",
         save_examples=False,
-    )
+    )'''
