@@ -7,7 +7,6 @@ import torchvision.transforms.functional as TF
 import torch.nn.functional as F
 from torchmetrics.functional.image.ssim import structural_similarity_index_measure as ssim_fn
 from typing import Optional, Tuple, Dict, List
-from pool_images_test.generate_pool_images import load_paths_from_file
 
 def psnr_torch(x, y, eps=1e-8):
     mse = torch.mean((x - y) ** 2).item()
@@ -135,10 +134,11 @@ def benchmark_ircnn_sigmap(
     rng = random.Random(seed)
     chosen = rng.sample(all_paths, n_images)'''
     
-    chosen = load_paths_from_file("./pool_images_test/benchmark_10_images.txt")
-
+    chosen = list_images("./BSDS300/images/images_benchmark/benchmark_10_images")
+    #print(chosen)
     rows = []
     for i, path in enumerate(chosen):
+        #print(path)
         clean_pil = Image.open(path).convert("RGB")
         clean = TF.to_tensor(clean_pil).unsqueeze(0)  # (1,3,H,W)
 
