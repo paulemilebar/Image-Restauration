@@ -67,7 +67,7 @@ class RandomPatchSigmaMapDataset(Dataset):
         # sigma in "pixel space" 0..50 (paper-like)
         sigma = random.uniform(self.sigma_min, self.sigma_max)
 
-        # IMPORTANT: NO CLIP OF NOISY (paper-like)
+        # IMPORTANT: NO CLIP OF NOISY
         noise = torch.randn_like(clean) * (sigma / 255.0)
         noisy = clean + noise  # peut sortir de [0,1]
 
@@ -78,7 +78,7 @@ class RandomPatchSigmaMapDataset(Dataset):
 # DRUNet: bias-free, 4 scales, SConv 2x2, TConv 2x2, nb=4
 class ResBlockOneReLU(nn.Module):
     """
-    Residual block: Conv -> ReLU -> Conv, bias-free, un seul ReLU.
+    Residual block: Conv -> ReLU -> Conv, bias-free, one ReLU.
     """
     def __init__(self, nc: int):
         super().__init__()
@@ -94,7 +94,7 @@ class ResBlockOneReLU(nn.Module):
 
 
 class SConv2x2(nn.Module):
-    """2×2 strided conv downscale (pas d'activation après, paper-like)"""
+    """2×2 strided conv downscale"""
     def __init__(self, in_nc: int, out_nc: int):
         super().__init__()
         self.conv = nn.Conv2d(in_nc, out_nc, kernel_size=2, stride=2, padding=0, bias=False)
@@ -104,7 +104,7 @@ class SConv2x2(nn.Module):
 
 
 class TConv2x2(nn.Module):
-    """2×2 transposed conv upscale (pas d'activation après, paper-like)"""
+    """2×2 transposed conv upscale """
     def __init__(self, in_nc: int, out_nc: int):
         super().__init__()
         self.tconv = nn.ConvTranspose2d(in_nc, out_nc, kernel_size=2, stride=2, padding=0, bias=False)
@@ -137,8 +137,8 @@ class DRUNetSigmaMap(nn.Module):
     """
     Input:  (B,4,H,W) noisy RGB + sigma_map (4 channels)
     Output: (B,3,H,W) denoised
-    paper-like : 4 scales, nc=[64,128,256,512], nb=4,
-    bias-free, SConv 2x2, TConv 2x2, pas d'activation après head/tail/SConv/TConv.
+    4 scales, nc=[64,128,256,512], nb=4,
+    bias-free, SConv 2x2, TConv 2x2, no activation after head/tail/SConv/TConv.
     """
     def __init__(self, in_nc=4, out_nc=3, nc=(64,128,256,512), nb=4):
         super().__init__()

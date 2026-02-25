@@ -40,7 +40,7 @@ def train_drunet(
 
     model = DRUNetSigmaMap(in_nc=4, out_nc=3, nc=(64,128,256,512), nb=4).to(device).train()
     opt = Adam(model.parameters(), lr=lr0)
-    loss_fn = nn.L1Loss()  # paper-like : L1 loss
+    loss_fn = nn.L1Loss() #L1 loss
 
     if device == "cuda":
         from torch.cuda.amp import GradScaler, autocast
@@ -48,7 +48,7 @@ def train_drunet(
         autocast_ctx = lambda: autocast(enabled=use_amp)
     else:
         scaler = None
-        autocast_ctx = lambda: torch.no_grad()  # dummy, pas utilisé
+        autocast_ctx = lambda: torch.no_grad()  # dummy
 
     best = float("inf")
     stagnant = 0

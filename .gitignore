@@ -8,10 +8,10 @@ __pycache__/
 # MacOS files
 .DS_Store
 
-# weights / checkpoints car ils sont trop lourd pour pouvoir les push sur le repo
-weights_*/
-**/weights_*/
-*.pth
-*.pt
-*.ckpt
+# weights / checkpoints because too big to push them 
+#weights_*/
+#**/weights_*/
+#*.pth
+#*.pt
+#*.ckpt
 

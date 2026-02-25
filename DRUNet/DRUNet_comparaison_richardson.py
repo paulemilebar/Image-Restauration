@@ -39,13 +39,6 @@ def deblur_tikhonov_l2(y: torch.Tensor, otf: torch.Tensor, beta: float = 2e-3) -
 
 @torch.no_grad()
 def richardson_lucy_circular(y: torch.Tensor, otf: torch.Tensor, iters: int = 30, eps: float = 1e-8) -> torch.Tensor:
-    """
-    Richardson-Lucy for circular convolution (Poisson-likelihood style).
-    Not great with Gaussian noise unless you stop early or denoise.
-    Update:
-      x <- x * (H^T (y / (H x + eps)))
-    with H^T implemented by conj(H) in Fourier.
-    """
     # init
     x = y.clamp(0.0, 1.0).clone()
 
@@ -81,10 +74,9 @@ def test_deblur_compare_baselines_vs_dpir(
 ):
     """
     dpir_fn should be a callable that takes (y, otf) and returns restored (B,3,H,W).
-    Example:
-      dpir_fn = lambda y, otf: dpir_hqs_deblur(y, otf, model, sigma_img=2.55, lam=0.23, n_iter=8)
+    
     """
-    assert dpir_fn is not None, "Please pass dpir_fn (your DPIR deblurring function wrapper)."
+    assert dpir_fn is not None, "Please pass dpir_fn"
     os.makedirs(out_dir, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 

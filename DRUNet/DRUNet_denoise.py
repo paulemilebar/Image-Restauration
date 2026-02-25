@@ -88,7 +88,7 @@ def run_single_image_demo(
     ircnn_lambda: float = 1.0,
 ) -> Dict[str, float]:
     """
-    Load clean image, add AWGN, denoise, save clean/noisy/denoised, print PSNR.
+    Load clean image, add AWGN, denoise, save clean/noisy/denoised, print PSNR and SSIM.
     """
     os.makedirs(out_dir, exist_ok=True)
     model, device = load_drunet(ckpt_path)

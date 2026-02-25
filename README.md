@@ -86,19 +86,6 @@ Targets:
 
 ---
 
-## Results (PSNR on 20 BSDS300 test images)
-
-Average PSNR (dB) ± std:
-
-| Method   | Denoise (σ=20) | Deblur (Levin kernel, σ=5) | SISR (Levin kernel, ×2) | Inpainting (missing=0.15, σ=2) |
-|----------|------------------|----------------------------|--------------------------|--------------------------------|
-| Degraded | 22.36 ± 0.27     | 22.47 ± 3.27               | 25.19 ± 2.81             | 15.53 ± 1.55                   |
-| IRCNN    | 29.91 ± 1.11     | 24.80 ± 1.20               | 29.65 ± 3.71             | 30.12 ± 2.08                   |
-| IRCNN+   | 29.11 ± 1.11     | 25.26 ± 3.05               | 29.83 ± 3.45             | 26.95 ± 1.59                   |
-| DRUNet   | **31.70 ± 1.93** | **30.18 ± 3.77**           | **30.01 ± 3.71**         | **30.30 ± 2.08**               |
-
-**Overall:** DRUNet performs best across all tasks in our experiments.
-
 ---
 
 ## Repository structure

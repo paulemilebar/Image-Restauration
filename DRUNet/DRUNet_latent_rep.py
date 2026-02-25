@@ -36,7 +36,6 @@ def add_awgn(clean_01, sigma_pixels, generator=None):
     """
     clean_01: (1,3,H,W) in [0,1]
     sigma_pixels: float
-    generator: torch.Generator optionnel (CPU uniquement)
     """
     sigma = float(sigma_pixels) / 255.0
 
@@ -129,8 +128,8 @@ def _unpad(x: torch.Tensor, pads):
 def plot_head_filters(model, out_path_png):
     """
     head.weight: (64,4,3,3)
-    - grille RGB (canaux 0..2)
-    - grille sigma (canal 3)
+    - grid RGB (canaux 0..2)
+    - grid sigma (canal 3)
     """
     W = model.head.weight.detach().cpu()  # (64,4,3,3)
     oc, ic, kh, kw = W.shape
@@ -230,8 +229,7 @@ def feature_energy_map(feat_bchw):
 
 def _corrcoef_1d(a: torch.Tensor, b: torch.Tensor, eps=1e-12) -> float:
     """
-    Corrélation de Pearson entre deux vecteurs 1D torch (CPU).
-    Retourne float.
+    Pearson correlation
     """
     a = a - a.mean()
     b = b - b.mean()
@@ -275,7 +273,6 @@ def topk_channel_grid_diverse(
         if len(picked) >= min(k, C):
             break
 
-    # si pas assez, on complète sans contrainte (fallback)
     if len(picked) < min(k, C):
         for c in sorted_idx:
             if c not in picked:
@@ -288,7 +285,7 @@ def topk_channel_grid_diverse(
     for t, c in enumerate(picked):
         ax = fig.add_subplot(grid, grid, t + 1)
         img = f[c]
-        img = norm01(img)  # visualisation min-max par canal
+        img = norm01(img)
         ax.imshow(img.numpy(), cmap="gray")
         ax.set_title(f"ch {c}")
         ax.axis("off")
@@ -300,7 +297,7 @@ def topk_channel_grid_diverse(
 
 def save_latent_pack(acts, out_dir, prefix, corr_thr=0.90):
     """
-    Sauve energy maps + top channels (diversifiés) pour plusieurs niveaux
+    Save energy maps + top channels for different levels
     """
     keys = ["head", "x1", "x2", "x3", "x4", "y3", "y2", "y1"]
     for k in keys:
@@ -392,7 +389,6 @@ def main(
     pil = Image.open(exemplar_path).convert("RGB")
     clean = to_tensor01(pil).unsqueeze(0).to(device)  # (1,3,H,W)
 
-    # ---- CPU generator for reproducibility (CPU only)
     g = torch.Generator().manual_seed(seed)
 
     # ---- run for each sigma and save full latent pack

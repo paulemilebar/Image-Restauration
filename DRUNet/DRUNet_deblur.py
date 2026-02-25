@@ -116,10 +116,6 @@ def test_deblurring_dpir_with_levin09(
     sigma_n = sigma_img / 255.0
     g = torch.Generator(device=device).manual_seed(seed)
     noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype, generator=g) * sigma_n
-    #except TypeError:
-        # fallback si generator n'est pas supporté
-     #   torch.manual_seed(seed)
-      #  noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype) * sigma_n
 
     y = (blurry + noise).clamp(0.0, 1.0)
 
@@ -271,7 +267,6 @@ def benchmark_dpir_deblur_to_csv(
 
     rows = []
     for i, p in enumerate(chosen):
-        # seed différent par image pour le bruit
         row = run_deblur_one_return_metrics(
             clean_path=p,
             ckpt_path=ckpt_path,
@@ -297,14 +292,6 @@ def benchmark_dpir_deblur_to_csv(
         std_row[c]  = float(df[c].std())
     df2 = pd.concat([df, pd.DataFrame([mean_row, std_row])], ignore_index=True)
 
-
-    mean_blur_psnr = df["psnr_blurry_db"].mean()
-    mean_rest_psnr = df["psnr_restored_db"].mean()
-    mean_gain_psnr = df["gain_db"].mean()
-    
-    mean_blur_ssim = df["ssim_blurry"].mean()
-    mean_rest_ssim = df["ssim_restored"].mean()
-    mean_gain_ssim = df["ssim_gain"].mean()
 
     csv_path = os.path.join(
         out_dir,

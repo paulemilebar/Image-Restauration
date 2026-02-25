@@ -26,7 +26,7 @@ def load_kernel12(path="kernels/kernels_12.mat", k_index=0) -> np.ndarray:
     k /= k.sum()
     return k
 
-# DPIR SISR closed-form (Eq. 14)
+# DPIR SISR closed-form
 def splits(a: torch.Tensor, sf: int) -> torch.Tensor:
     # a: N x C x H x W -> N x C x (H/sf) x (W/sf) x (sf^2)
     # sf: scale factor
@@ -55,7 +55,7 @@ def downsample_decimate(x: torch.Tensor, sf: int) -> torch.Tensor:
 
 def pre_calculate(img_L: torch.Tensor, k: torch.Tensor, sf: int):
     h, w = img_L.shape[-2:]
-    FB  = p2o(k, (h*sf, w*sf)) # FB = FFT(k) : blurring operatour B in Fourrier domain
+    FB  = p2o(k, (h*sf, w*sf)) # blurring operatour B in Fourrier domain
     FBC = torch.conj(FB)
     F2B = torch.pow(torch.abs(FB), 2)
     STy = upsample_zeros(img_L, sf=sf)
@@ -64,7 +64,7 @@ def pre_calculate(img_L: torch.Tensor, k: torch.Tensor, sf: int):
 
 def data_solution_closed_form(z_prev, FB, FBC, F2B, FBFy, alpha, sf):
     """
-    closed-form x-step (Eq.14) as implemented in DPIR utils_sisr.data_solution
+    closed-form x-step
     """
     FR = FBFy + torch.fft.fftn(alpha * z_prev, dim=(-2, -1))
     x1 = FB.mul(FR)
@@ -98,7 +98,7 @@ def shift_pixel_torch(x: torch.Tensor, sf: int, upper_left: bool = True) -> torc
     return F.grid_sample(x, grid, mode="bilinear", padding_mode="border", align_corners=True)
 
 def get_rho_sigma(noise_level_model: float, iter_num: int, modelSigma1: float, modelSigma2: float, w: float = 1.0):
-    # sigma schedule (pixel space): modelSigma1 -> modelSigma2 (log), then /255
+    # sigma schedule (pixel space): modelSigma1 -> modelSigma2 (log)
     sigmas = np.exp(np.linspace(np.log(modelSigma1), np.log(modelSigma2), iter_num)).astype(np.float32) / 255.0
 
     # safeguard for "sigma=0" case
@@ -128,10 +128,10 @@ def run_one(
     ckpt_path: str,
     out_dir: str,
     scale: int = 3,
-    sigma_img: float = 7.65,     # LR noise in pixel space (0..255)
+    sigma_img: float = 7.65,# LR noise in pixel space (0..255)
     iter_num: int = 24,
     kernels_mat_path: str = "kernels/kernels_12.mat",
-    k_index: int = 2,           # choose 0..7
+    k_index: int = 2,
     modelSigma1: float = 49.0,
     seed: int = 0,
 ):
@@ -149,7 +149,7 @@ def run_one(
     x = modcrop_tensor(x, scale)
     B, C, H, W = x.shape
 
-    # ---- load paper kernel ----
+    # ---- load kernel ----
     if not os.path.isfile(kernels_mat_path):
         raise FileNotFoundError(
             f"Missing {kernels_mat_path}. Put kernels_12.mat in ./kernels/."
@@ -158,7 +158,7 @@ def run_one(
     k = torch.from_numpy(k_np.astype(np.float32)).to(device=device, dtype=x.dtype)
     k = k.unsqueeze(0).unsqueeze(0).repeat(1, C, 1, 1)  # (1,3,kh,kw)
 
-    # ---- classical degradation: y = (x ⊗ k)↓s + n  with circular BC ----
+    # ---- classical degradation ----
     FB = p2o(k, (H, W))  # complex OTF
     xb = torch.real(torch.fft.ifftn(torch.fft.fftn(x, dim=(-2, -1)) * FB, dim=(-2, -1)))
     y = downsample_decimate(xb, scale)
@@ -176,7 +176,6 @@ def run_one(
     save_img01(x, os.path.join(out_dir, "clean.png"))
     save_img01(y, os.path.join(out_dir, "lr.png"))
 
-    # ---- DPIR params (K=24, sigma_K=max(sigma,s)) ----
     noise_level_model = sigma_n
     modelSigma2 = max(float(scale), float(noise_level_model * 255.0))
     rhos, sigmas = get_rho_sigma(noise_level_model, iter_num, modelSigma1, modelSigma2, w=1.0)
@@ -374,7 +373,7 @@ def benchmark_sisr_10_random_to_csv(
     save_examples: bool = False,
 ):
     """
-    Pick 10 random test images, run DPIR-SISR, write CSV and print means.
+    Pick 10 test images, run DPIR-SISR, write CSV and print means.
     """
     os.makedirs(out_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
