@@ -27,7 +27,7 @@ def load_kernel12(path="kernels/kernels_12.mat", k_index=0) -> np.ndarray:
     k /= k.sum()
     return k
 
-# SISR closed-form (Eq. 14)
+# SISR closed-form
 def splits(a: torch.Tensor, sf: int) -> torch.Tensor:
     '''a: N x C x H x W -> N x C x (H/sf) x (W/sf) x (sf^2)
     sf: scale factor'''
@@ -94,7 +94,7 @@ def shift_pixel_torch(x: torch.Tensor, sf: int, upper_left: bool = True) -> torc
 
     gx = (xx / (W - 1)) * 2 - 1
     gy = (yy / (H - 1)) * 2 - 1
-    grid = torch.stack([gx, gy], dim=-1).unsqueeze(0)  # (1,H,W,2)
+    grid = torch.stack([gx, gy], dim=-1).unsqueeze(0)
 
     return F.grid_sample(x, grid, mode="bilinear", padding_mode="border", align_corners=True)
 
@@ -149,12 +149,8 @@ def run_one(
 
     sigma_n = float(sigma_img) / 255.0
     if sigma_n > 0:
-        try:
-            g = torch.Generator(device=device).manual_seed(seed)
-            y = y + torch.randn_like(y, generator=g) * sigma_n
-        except TypeError:
-            torch.manual_seed(seed)
-            y = y + torch.randn_like(y) * sigma_n
+        g = torch.Generator(device=device).manual_seed(seed)
+        y = y + torch.randn_like(y, generator=g) * sigma_n
 
     # save
     save_img01(x, os.path.join(out_dir, "clean.png"))
@@ -167,7 +163,6 @@ def run_one(
     rhos_t = torch.tensor(rhos, device=device, dtype=x.dtype)
     sigmas_t = torch.tensor(sigmas, device=device, dtype=x.dtype)
 
-    # pre-calc
     FB2, FBC, F2B, FBFy = pre_calculate(y, k, scale)
 
     # init z0 = bicubic(y) + shift correction
@@ -288,12 +283,8 @@ def run_one_metrics_sisr(
 
     sigma_n = float(sigma_img) / 255.0
     if sigma_n > 0:
-        try:
-            g = torch.Generator(device=device).manual_seed(seed)
-            y = y + torch.randn_like(y, generator=g) * sigma_n
-        except TypeError:
-            torch.manual_seed(seed)
-            y = y + torch.randn_like(y) * sigma_n
+        g = torch.Generator(device=device).manual_seed(seed)
+        y = y + torch.randn_like(y, generator=g) * sigma_n
 
     # init z0 = bicubic + shift
     z = F.interpolate(y, scale_factor=scale, mode="bicubic", align_corners=False)
@@ -309,7 +300,6 @@ def run_one_metrics_sisr(
     rhos_t = torch.tensor(rhos, device=device, dtype=x.dtype)
     sigmas_t = torch.tensor(sigmas, device=device, dtype=x.dtype)
 
-    # pre-calc
     FB2, FBC, F2B, FBFy = pre_calculate(y, k, scale)
 
     # iterations
@@ -418,9 +408,9 @@ def benchmark_sisr_10_random_to_csv(
 
     return df2, csv_path
 
-if __name__ == "__main__":
+'''if __name__ == "__main__":
     # benchmark for 10 images
-    '''benchmark_sisr_10_random_to_csv(
+    benchmark_sisr_10_random_to_csv(
         test_dir="./BSDS300/images/images_benchmark/benchmark_10_images",
         ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
         out_dir="./results_IRCNN_sigmamap/SISR_benchmark",

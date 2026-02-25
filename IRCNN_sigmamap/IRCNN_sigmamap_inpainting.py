@@ -13,7 +13,6 @@ import pandas as pd
 
 
 # Utils
-
 def save_img01(t: torch.Tensor, path: str):
     TF.to_pil_image(t.squeeze(0).clamp(0, 1).cpu()).save(path)
     
@@ -50,7 +49,7 @@ def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "ircnn"):
     plt.savefig(os.path.join(out_dir, f"{prefix}_ssim.png"), dpi=200)
     plt.close()
 
-    # --- 2) ||x_{k+1}-x_k|| / ||x0|| (log scale)
+    # relative change
     relx = np.array(metrics["rel_step_x"])
     relz = np.array(metrics["rel_step_z"])
     relx = np.maximum(relx, 1e-16)
@@ -65,7 +64,7 @@ def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "ircnn"):
     plt.savefig(os.path.join(out_dir, f"{prefix}_rel_step_log.png"), dpi=200)
     plt.close()
 
-    # Cumsum
+    # Cumulative sum
     cx = np.array(metrics["cumsum_x"])
     cz = np.array(metrics["cumsum_z"])
     plt.figure()
@@ -79,12 +78,8 @@ def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "ircnn"):
     plt.close()
 
 def randn_like_compat(x: torch.Tensor, seed: int):
-    try:
-        g = torch.Generator(device=x.device).manual_seed(seed)
-        return torch.randn(x.shape, device=x.device, dtype=x.dtype, generator=g)
-    except TypeError:
-        torch.manual_seed(seed)
-        return torch.randn_like(x)
+    g = torch.Generator(device=x.device).manual_seed(seed)
+    return torch.randn(x.shape, device=x.device, dtype=x.dtype, generator=g)
 
 
 def make_random_rect_mask(H: int, W: int, missing_ratio: float = 0.2, seed: int = 0,
@@ -151,7 +146,7 @@ def get_rho_sigma(sigma_obs=2.55/255, iter_num=15, modelSigma2=2.55):
     modelSigma1 = 49.0
     modelSigmaS = np.logspace(np.log10(modelSigma1), np.log10(modelSigma2), iter_num).astype(np.float32)
     sigmas = modelSigmaS / 255.0
-    mus = list(map(lambda x: (sigma_obs**2) / (x**2) / 3.0, sigmas))  # /3 pour RGB
+    mus = list(map(lambda x: (sigma_obs**2) / (x**2) / 3.0, sigmas))
     rhos = mus
     return np.array(rhos, np.float32), np.array(sigmas, np.float32)
 
@@ -162,11 +157,11 @@ def denoise_sigma_map(model_name: str, model, x3: torch.Tensor, sigma: float):
     inp4 = torch.cat([x3, sigma_map], dim=1)
     return ircnn_infer(model, inp4).clamp(0, 1)
 
-# PnP-HQS Inpainting
+# HQS Inpainting
 @torch.no_grad()
 def hqs_inpaint(
-    y: torch.Tensor,     # (1,3,H,W) masked observation (trous=0)
-    M: torch.Tensor,     # (1,1,H,W) 1 connu / 0 manquant
+    y: torch.Tensor,
+    M: torch.Tensor,
     model_name: str,
     model,
     iter_num: int = 15,
@@ -178,7 +173,7 @@ def hqs_inpaint(
     add_small_noise_in_holes: float = 0.01,
     seed: int = 0,
     track_convergence: bool = False,
-    gt: torch.Tensor = None,   # (1,3,H,W) ground truth dans [0,1]
+    gt: torch.Tensor = None,
 ):
     device = y.device
     M3 = M.repeat(1, 3, 1, 1)
@@ -192,7 +187,7 @@ def hqs_inpaint(
     if add_small_noise_in_holes > 0:
         z = (z + (1.0 - M3) * add_small_noise_in_holes * randn_like_compat(z, seed=seed)).clamp(0, 1)
 
-    # buffers convergence
+    # metrics
     metrics = None
     if track_convergence:
         metrics = {
@@ -200,7 +195,6 @@ def hqs_inpaint(
             "psnr_z":   [0.0] * iter_num,
             "ssim_x":   [0.0] * iter_num,
             "ssim_z":   [0.0] * iter_num,
-            # rel changes
             "rel_step_x": [0.0] * (iter_num-1),
             "rel_step_z": [0.0] * (iter_num-1),
             "cumsum_x":   [0.0] * (iter_num-1),
@@ -213,15 +207,12 @@ def hqs_inpaint(
         csum_z = 0.0
 
     for k in range(iter_num):
-        #mu = rhos_t[k].view(1, 1, 1, 1)
         sigma_k = sigmas[k]
-        #print(f"sigma:{sigma_k}")
         mu = lambda_pnp/ (sigma_k**2)
-        # x-step (fermé pixelwise)
         xk = (M3 * y + mu * z) / (M3 + mu)
         xk = xk.clamp(0, 1)
 
-        # PSNR(x_k) and SSIM
+        # PSNR and SSIM
         if track_convergence and (gt is not None):
             metrics["psnr_x"][k] = psnr_torch(xk, gt)
             metrics["ssim_x"][k] = ssim_torch(xk, gt)
@@ -294,7 +285,7 @@ def run_compare(
     rec_sh = shepard_initialize_rgb(y, M, window=shepard_window, p=shepard_p).to(device=device, dtype=gt.dtype)
     rec_sh = (M3 * y + (1.0 - M3) * rec_sh).clamp(0, 1)
     
-    # Load IRCNN
+    # Load IRCNN+
     ircnn = IRCNNSigmaMap(features=64).to(device).eval()
     st = torch.load(ircnn_ckpt, map_location=device)
     sd = st["model"] if isinstance(st, dict) and "model" in st else st
@@ -341,7 +332,7 @@ def run_compare(
     
 
 #castel
-clean_path = "./BSDS300/images/test/37073.jpg"
+'''clean_path = "./BSDS300/images/test/37073.jpg"
 print("Image choisie:", clean_path)
 run_compare(
     clean_path = clean_path,
@@ -353,7 +344,7 @@ run_compare(
     lambda_pnp=3,
     sigma_obs_pix=0,
     shepard_window=11
-)
+)'''
 
 
 @torch.no_grad()
@@ -382,7 +373,7 @@ def run_compare_return_metrics(
     M3 = M.repeat(1, 3, 1, 1)
     y = (gt * M3).clamp(0, 1)
 
-    # noise observation (on known pixels)
+    # noise observation
     sigma_obs = float(sigma_obs_pix) / 255.0
     if sigma_obs > 0:
         y = (M3 * (y + randn_like_compat(y, seed=seed+123) * sigma_obs)).clamp(0, 1)
@@ -490,7 +481,6 @@ def run_pool_10_images(
 ):
     os.makedirs(out_root, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Device:", device)
 
     paths = list_images_in_dir(clean_dir)
     chosen = pick_n_images(paths, n=n_images, seed=seed)
@@ -500,7 +490,6 @@ def run_pool_10_images(
     rows = []
     for p in chosen:
         name = os.path.splitext(os.path.basename(p))[0]
-        print(f"Démarrage pour image: {name}")
         out_dir = os.path.join(out_root, name) if save_outputs_per_image else out_root
 
         r = run_compare_return_metrics(
@@ -532,7 +521,6 @@ def run_pool_10_images(
 
     csv_path = os.path.join(out_root, csv_name)
     df2.to_csv(csv_path, index=False)
-    print("[DONE] CSV saved:", csv_path)
     
     return df2
    

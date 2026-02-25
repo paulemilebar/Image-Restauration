@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from torchmetrics.functional.image.ssim import structural_similarity_index_measure as ssim_fn
 from typing import List, Tuple, Optional, Dict
 
-# --- Fonctions Utilitaires ---
+# Utils
 def psnr_torch(x01: torch.Tensor, y01: torch.Tensor, eps: float = 1e-8) -> float:
     mse = torch.mean((x01 - y01) ** 2).item()
     return 10.0 * math.log10(1.0 / (mse + eps))
@@ -44,8 +44,6 @@ def solve_fidelity_denoise(y, z, mu):
      return (y + mu * z) / (1 + mu)
 
 
-# --- Fonction pour comparer perf ---
-
 def run_single(
     clean_path:str,
     ckpt_path:str = "./weights_ircnn",
@@ -57,14 +55,12 @@ def run_single(
     os.makedirs(out_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 1. Charger l'image et préparer le flou
     img_pil = Image.open(clean_path).convert("RGB")
     clean = TF.to_tensor(img_pil).unsqueeze(0).to(device)
     
     manager = IRCNNModelManager(ckpt_path, device=device)
     expert = manager.get_expert(sigma)
     
-    # Ajout du bruit
     noisy = add_awgn(clean, sigma=sigma, seed=seed, device=device)
     den = expert.denoise(noisy).clamp(0, 1)
     noisy_clamped = noisy.clamp(0.0, 1.0)
@@ -122,7 +118,6 @@ def benchmark_ircnn(
 
         expert = model.get_expert(sigma)
     
-        # Ajout du bruit
         noisy = add_awgn(clean, sigma=sigma, seed=seed, device=device)
         den = expert.denoise(noisy).clamp(0, 1)
         noisy_clamped = noisy.clamp(0.0, 1.0)

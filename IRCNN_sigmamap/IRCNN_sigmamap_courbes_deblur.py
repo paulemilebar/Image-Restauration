@@ -14,10 +14,10 @@ def _rmse(a: torch.Tensor) -> float:
 
 @torch.no_grad()
 def hqs_deblur_with_trace(
-    y: torch.Tensor,                 # (B,3,H,W) in [0,1]
-    otf: torch.Tensor,               # (H,W) complex
-    denoiser: torch.nn.Module,       # IRCNNSigmaMap
-    sigma_img: float,                # pixel space
+    y: torch.Tensor,
+    otf: torch.Tensor,
+    denoiser: torch.nn.Module,
+    sigma_img: float,
     lam: float = 0.23,
     n_iter: int = 8,
     sigma_max: float = 49.0,
@@ -36,7 +36,7 @@ def hqs_deblur_with_trace(
 
     Y = torch.fft.fft2(y, dim=(-2, -1))
     Hc = torch.conj(otf)
-    H2 = (otf.real**2 + otf.imag**2)  # |H|^2
+    H2 = (otf.real**2 + otf.imag**2)
 
     z = y.clone()
     x_prev, z_prev = None, None
@@ -72,7 +72,7 @@ def hqs_deblur_with_trace(
         X = numer / denom
         x = torch.fft.ifft2(X, dim=(-2, -1)).real
 
-        # z-step (denoise)
+        # z-step
         sigma_map = torch.full((B, 1, H, W), sigma_d_n, device=device)
         inp = torch.cat([x, sigma_map], dim=1)
         z = denoiser(inp).clamp(0.0, 1.0)
@@ -162,12 +162,8 @@ def test_deblurring_with_levin09_convergence(
     blurry = circ_conv_fft(x, otf)
 
     sigma_n = sigma_img / 255.0
-    try:
-        g = torch.Generator(device=device).manual_seed(seed)
-        noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype, generator=g) * sigma_n
-    except TypeError:
-        torch.manual_seed(seed)
-        noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype) * sigma_n
+    g = torch.Generator(device=device).manual_seed(seed)
+    noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype, generator=g) * sigma_n
 
     y = (blurry + noise).clamp(0.0, 1.0)
 
@@ -221,7 +217,7 @@ def plot_convergence_curves(logs, title="Convergence Deblur IRCNN+", save_dir ="
     ssim_z = np.array(logs["ssim_z"])
     ssim_x = np.array(logs["ssim_x"])
 
-    # 1) data fidelity + x-z consistency
+    # data fidelity + x-z consistency
     plt.figure()
     plt.plot(ks, data_rmse, label="RMSE(y - Hx_k)")
     plt.plot(ks, xz_rmse, label="RMSE(x_k - z_k)")
@@ -232,7 +228,7 @@ def plot_convergence_curves(logs, title="Convergence Deblur IRCNN+", save_dir ="
     plt.savefig(os.path.join(save_dir, f"rmse.png"), dpi=200)
     plt.grid(True)
 
-    # 2) relative changes
+    # relative changes
     plt.figure()
     plt.plot(ks, dx_rel, label="rel change x_k")
     plt.plot(ks, dz_rel, label="rel change z_k")
@@ -243,7 +239,7 @@ def plot_convergence_curves(logs, title="Convergence Deblur IRCNN+", save_dir ="
     plt.savefig(os.path.join(save_dir, f"relative_changes.png"), dpi=200)
     plt.grid(True)
 
-    # 3) PSNR
+    # PSNR
     plt.figure()
     plt.plot(ks, psnr_x, label="PSNR x_k")
     plt.plot(ks, psnr_z, label="PSNR z_k")
@@ -254,7 +250,7 @@ def plot_convergence_curves(logs, title="Convergence Deblur IRCNN+", save_dir ="
     plt.savefig(os.path.join(save_dir, f"psnr.png"), dpi=200)
     plt.grid(True)
     
-    # 3) SSIM
+    # SSIM
     plt.figure()
     plt.plot(ks, ssim_x, label="SSIM x_k")
     plt.plot(ks, ssim_z, label="SSIM z_k")
@@ -265,7 +261,7 @@ def plot_convergence_curves(logs, title="Convergence Deblur IRCNN+", save_dir ="
     plt.savefig(os.path.join(save_dir, f"ssim.png"), dpi=200)
     plt.grid(True)
 
-    # 4) sigma schedule
+    # sigma schedule
     plt.figure()
     plt.plot(ks, sigma_d)
     plt.xlabel("iteration k")

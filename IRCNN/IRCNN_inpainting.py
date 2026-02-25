@@ -47,7 +47,7 @@ def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "ircnn"):
     plt.savefig(os.path.join(out_dir, f"{prefix}_ssim.png"), dpi=200)
     plt.close()
 
-    # --- 2) ||x_{k+1}-x_k|| / ||x0|| (log scale)
+    # Relative change
     relx = np.array(metrics["rel_step_x"])
     relz = np.array(metrics["rel_step_z"])
     relx = np.maximum(relx, 1e-16)
@@ -62,7 +62,7 @@ def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "ircnn"):
     plt.savefig(os.path.join(out_dir, f"{prefix}_rel_step_log.png"), dpi=200)
     plt.close()
 
-    # Cumsum
+    # Cumulative sum
     cx = np.array(metrics["cumsum_x"])
     cz = np.array(metrics["cumsum_z"])
     plt.figure()
@@ -76,12 +76,8 @@ def save_convergence_plots(metrics: dict, out_dir: str, prefix: str = "ircnn"):
     plt.close()
 
 def randn_like_compat(x: torch.Tensor, seed: int):
-    try:
-        g = torch.Generator(device=x.device).manual_seed(seed)
-        return torch.randn(x.shape, device=x.device, dtype=x.dtype, generator=g)
-    except TypeError:
-        torch.manual_seed(seed)
-        return torch.randn_like(x)
+    g = torch.Generator(device=x.device).manual_seed(seed)
+    return torch.randn(x.shape, device=x.device, dtype=x.dtype, generator=g)
 
 def make_random_rect_mask(H: int, W: int, missing_ratio: float = 0.2, seed: int = 0,
                           min_rect: int = 2, max_rect: int = 7) -> torch.Tensor:
@@ -106,8 +102,8 @@ def make_random_rect_mask(H: int, W: int, missing_ratio: float = 0.2, seed: int 
 # Shepard init (RGB) : Interpolation of neighboors points and do an average in the window used. This is an analytic method without Deep Learning
 def shepard_initialize_rgb(y01: torch.Tensor, M01: torch.Tensor, window: int = 9, p: float = 2.0) -> torch.Tensor:
     assert window % 2 == 1
-    y = y01.squeeze(0).permute(1, 2, 0).detach().cpu().numpy()   # (H,W,3)
-    m = M01.squeeze(0).squeeze(0).detach().cpu().numpy().astype(np.uint8)  # (H,W)
+    y = y01.squeeze(0).permute(1, 2, 0).detach().cpu().numpy()
+    m = M01.squeeze(0).squeeze(0).detach().cpu().numpy().astype(np.uint8)
     H, W, _ = y.shape
     out = y.copy()
     wing = window // 2
@@ -152,11 +148,11 @@ def get_rho_sigma(sigma_obs=2.55/255, iter_num=15, modelSigma2=2.55):
     return np.array(rhos, np.float32), np.array(sigmas, np.float32)
 
 
-# PnP-HQS Inpainting
+# HQS Inpainting
 @torch.no_grad()
 def hqs_inpaint(
-    y: torch.Tensor,     # (1,3,H,W) masked observation (trous=0)
-    M: torch.Tensor,     # (1,1,H,W) 1 connu / 0 manquant
+    y: torch.Tensor,
+    M: torch.Tensor,
     model_name: str,
     model,
     lambda_pnp: float = 0.23,
@@ -168,12 +164,11 @@ def hqs_inpaint(
     add_small_noise_in_holes: float = 0.01,
     seed: int = 0,
     track_convergence: bool = False,
-    gt: torch.Tensor = None,   # (1,3,H,W) ground truth dans [0,1]
+    gt: torch.Tensor = None,
 ):
     device = y.device
     M3 = M.repeat(1, 3, 1, 1)
 
-    # schedule
     sigma_obs = float(sigma_obs_pix) / 255.0
     rhos, sigmas = get_rho_sigma(sigma_obs=sigma_obs, iter_num=iter_num, modelSigma2=modelSigma2_pix)
     rhos_t = torch.tensor(rhos, device=device, dtype=y.dtype)
@@ -183,7 +178,7 @@ def hqs_inpaint(
     if add_small_noise_in_holes > 0:
         z = (z + (1.0 - M3) * add_small_noise_in_holes * randn_like_compat(z, seed=seed)).clamp(0, 1)
 
-    # --- NEW: buffers convergence ---
+    # metrics
     metrics = None
     if track_convergence:
         metrics = {
@@ -191,7 +186,6 @@ def hqs_inpaint(
             "psnr_z":   [0.0] * iter_num,
             "ssim_x":   [0.0] * iter_num,
             "ssim_z":   [0.0] * iter_num,
-            # rel changes
             "rel_step_x": [0.0] * (iter_num-1),
             "rel_step_z": [0.0] * (iter_num-1),
             "cumsum_x":   [0.0] * (iter_num-1),
@@ -204,15 +198,13 @@ def hqs_inpaint(
         csum_z = 0.0
 
     for k in range(iter_num):
-        #mu = rhos_t[k].view(1, 1, 1, 1)
         sigma_k = sigmas[k]
-        #print(f"sigma:{sigma_k}")
         mu = lambda_pnp/ (sigma_k**2)
-        # x-step (fermé pixelwise)
+        # x-step
         xk = (M3 * y + mu * z) / (M3 + mu)
         xk = xk.clamp(0, 1)
 
-        # PSNR(x_k) and SSIM
+        # PSNR and SSIM
         if track_convergence and (gt is not None):
             metrics["psnr_x"][k] = psnr_torch(xk, gt)
             metrics["ssim_x"][k] = ssim_torch(xk, gt)
@@ -326,7 +318,7 @@ def run_compare(clean_path, out_dir, ckpt_path,
     
     
     
-############## CODE FOR BENCHMARK ####################
+# CODE FOR BENCHMARK
 
 IMG_EXT = (".png", ".jpg", ".jpeg")
 
@@ -369,7 +361,7 @@ def run_compare_return_metrics(
     M3 = M.repeat(1, 3, 1, 1)
     y = (gt * M3).clamp(0, 1)
 
-    # noise observation (on known pixels)
+    # noise observation on known pixels
     sigma_obs = float(sigma_obs_pix) / 255.0
     if sigma_obs > 0:
         y = (M3 * (y + randn_like_compat(y, seed=seed+123) * sigma_obs)).clamp(0, 1)
@@ -500,7 +492,7 @@ def run_pool_10_images(
     
     return df2
 
-if __name__ == "__main__":
+'''if __name__ == "__main__":
     #castel
     run_compare(
         clean_path="./BSDS300/images/test/102061.jpg",
@@ -516,7 +508,7 @@ if __name__ == "__main__":
     )
         
         
-    '''df = run_pool_10_images(
+    df = run_pool_10_images(
             clean_dir="./BSDS300/images/images_benchmark/benchmark_10_images",
             out_root="./results_IRCNN/inpainting_benchmark",
             ckpt_path="./weights_ircnn",
