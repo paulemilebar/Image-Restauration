@@ -27,7 +27,6 @@ def train(
     os.makedirs(out_dir, exist_ok=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print("device:", device)
 
     ds = RandomPatchSigmaMapDataset(clean_dir, patch=patch, sigma_min=sigma_min, sigma_max=sigma_max)
     dl = DataLoader(

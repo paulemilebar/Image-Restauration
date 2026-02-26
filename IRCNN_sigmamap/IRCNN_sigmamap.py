@@ -7,7 +7,6 @@ import torchvision.transforms.functional as TF
 
 
 # Preparation of the data we will use for training
-
 IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff")
 
 class RandomPatchSigmaMapDataset(Dataset):
@@ -23,7 +22,6 @@ class RandomPatchSigmaMapDataset(Dataset):
         self.sigma_max = sigma_max
 
     def __len__(self):
-        # not important; training uses fixed steps per epoch
         return 1000000
 
     def _random_crop(self, img: Image.Image) -> Image.Image:
@@ -51,14 +49,14 @@ class RandomPatchSigmaMapDataset(Dataset):
         img = self._random_crop(img)
         img = self._augment(img)
 
-        clean = TF.to_tensor(img)  # (3,H,W) in [0,1]
+        clean = TF.to_tensor(img)
 
         sigma = random.uniform(self.sigma_min, self.sigma_max)
         noise = torch.randn_like(clean) * (sigma / 255.0)
         noisy = (clean + noise)
 
         sigma_map = torch.full((1, clean.shape[1], clean.shape[2]), sigma / 255.0)
-        inp = torch.cat([noisy, sigma_map], dim=0)  # (4,H,W)
+        inp = torch.cat([noisy, sigma_map], dim=0)
 
         return inp, clean
 
@@ -92,7 +90,7 @@ class IRCNNSigmaMap(nn.Module):
         self.net = nn.Sequential(*layers)
 
     def forward(self, inp):
-        pred_noise = self.net(inp)          # (B,3,H,W)
+        pred_noise = self.net(inp)
         noisy = inp[:, :3, :, :]
         clean = (noisy - pred_noise)
         return clean

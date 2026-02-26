@@ -135,9 +135,8 @@ def benchmark_ircnn_sigmap(
     ]
     rows = []
     for i, path in enumerate(images):
-        #print(path)
         clean_pil = Image.open(path).convert("RGB")
-        clean = TF.to_tensor(clean_pil).unsqueeze(0)  # (1,3,H,W)
+        clean = TF.to_tensor(clean_pil).unsqueeze(0)
 
         noisy = add_awgn(clean, sigma=sigma, seed=seed + i, device=device)  # NO CLAMP
         den = denoise_noisy_tensor(model, noisy, sigma=sigma, device=device).cpu()

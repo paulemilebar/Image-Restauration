@@ -31,7 +31,7 @@ def circ_conv_fft(x: torch.Tensor, otf: torch.Tensor) -> torch.Tensor:
 
 
 @torch.no_grad()
-def dpir_hqs_deblur(
+def hqs_deblur(
     y: torch.Tensor,
     otf: torch.Tensor,
     denoiser: torch.nn.Module,
@@ -69,7 +69,7 @@ def dpir_hqs_deblur(
         X = numer / denom
         x = torch.fft.ifft2(X, dim=(-2, -1)).real
 
-        # z-step = denoise(x, sigma_d)
+        # z-step
         sigma_map = torch.full((B, 1, H, W), sigma_d_n, device=device)
         inp = torch.cat([x, sigma_map], dim=1)
         z = denoiser(inp).clamp(0.0, 1.0)
@@ -83,7 +83,7 @@ deblur_ircnn_vf(clean_path=clean_path)'''
 
 
 @torch.no_grad()
-def test_deblurring_dpir_with_levin09(
+def test_deblurring_with_levin09(
     clean_path: str,
     ckpt_path: str,
     levin09_path: str = "kernels/Levin09.npy",
@@ -91,27 +91,27 @@ def test_deblurring_dpir_with_levin09(
     sigma_img: float = 2.55,
     n_iter: int = 8,
     lam: float = 0.23,
-    out_dir: str = "test_outputs_dpir_deblur",
+    out_dir: str = "test_outputs_deblur",
     seed: int = 0,
 ):
     os.makedirs(out_dir, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # model
+    # load model
     model = IRCNNSigmaMap().to(device).eval()
     state = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(state["model"], strict=True)
     
     # load clean image
     clean_pil = Image.open(clean_path).convert("RGB")
-    x = TF.to_tensor(clean_pil).unsqueeze(0).to(device)  # (1,3,H,W)
+    x = TF.to_tensor(clean_pil).unsqueeze(0).to(device)
     B, C, H, W = x.shape
 
     # load kernel Levin09 for blurring
     k_np = load_levin09_kernel(levin09_path, kernel_index)
     k = torch.from_numpy(k_np).to(device)
 
-    # blurring (circular) + add Gaussian noise
+    # blurring + add Gaussian noise
     otf = psf_to_otf(k, (H, W))
     blurry = circ_conv_fft(x, otf)
 
@@ -120,7 +120,7 @@ def test_deblurring_dpir_with_levin09(
     noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype, generator=g) * sigma_n
     y = (blurry + noise).clamp(0.0, 1.0)
 
-    x_hat = dpir_hqs_deblur(
+    x_hat = hqs_deblur(
         y=y, otf=otf, denoiser=model,
         sigma_img=sigma_img, lam=lam, n_iter=n_iter, sigma_max=49.0
     )
@@ -142,14 +142,14 @@ def test_deblurring_dpir_with_levin09(
     print("Saved to:", out_dir)
     print(f"Kernel index     : {kernel_index}")
     print(f"Noise sigma_img  : {sigma_img:.2f} (pixel space)")
-    print(f"DPIR n_iter      : {n_iter}, lambda={lam}")
+    print(f"n_iter      : {n_iter}, lambda={lam}")
     print(f"PSNR blurry/noisy: {psnr_blur:.2f} dB")
     print(f"PSNR restored    : {psnr_rec:.2f} dB")
     print(f"SSIM blurry/noisy: {ssim_blur:.2f}")
     print(f"SSIM restored    : {ssim_rec:.2f}")
     
 
-'''test_deblurring_dpir_with_levin09(
+'''test_deblurring_with_levin09(
     clean_path="./BSDS300/images/test/37073.jpg",
     ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
     levin09_path="kernels/Levin09.npy",
@@ -185,7 +185,7 @@ def run_deblur_one_return_metrics(
 
     # load clean image
     clean_pil = Image.open(clean_path).convert("RGB")
-    x = TF.to_tensor(clean_pil).unsqueeze(0).to(device)  # (1,3,H,W)
+    x = TF.to_tensor(clean_pil).unsqueeze(0).to(device)
     _, _, H, W = x.shape
 
     # load kernel Levin09
@@ -197,17 +197,13 @@ def run_deblur_one_return_metrics(
     blurry = circ_conv_fft(x, otf)
 
     sigma_n = sigma_img / 255.0
-    try:
-        g = torch.Generator(device=device).manual_seed(seed)
-        noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype, generator=g) * sigma_n
-    except TypeError:
-        torch.manual_seed(seed)
-        noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype) * sigma_n
+    g = torch.Generator(device=device).manual_seed(seed)
+    noise = torch.randn(blurry.shape, device=blurry.device, dtype=blurry.dtype, generator=g) * sigma_n
 
     y = (blurry + noise).clamp(0.0, 1.0)
 
-    # deblur (DPIR/HQS)
-    x_hat = dpir_hqs_deblur(
+    # deblur
+    x_hat = hqs_deblur(
         y=y, otf=otf, denoiser=model,
         sigma_img=sigma_img, lam=lam, n_iter=n_iter, sigma_max=49.0
     )
@@ -248,7 +244,7 @@ def run_deblur_one_return_metrics(
 
 
 @torch.no_grad()
-def benchmark_dpir_deblur_to_csv(
+def benchmark_deblur_to_csv(
     test_dir: str,
     ckpt_path: str,
     levin09_path: str = "kernels/Levin09.npy",
@@ -301,14 +297,14 @@ def benchmark_dpir_deblur_to_csv(
 
     csv_path = os.path.join(
         out_dir,
-        f"dpir_deblur_benchmark_{n_images}imgs_k{kernel_index}_sig{sigma_img:.2f}_K{n_iter}_lam{lam}_seed{seed}.csv"
+        f"deblur_benchmark_{n_images}imgs_k{kernel_index}_sig{sigma_img:.2f}_K{n_iter}_lam{lam}_seed{seed}.csv"
     )
     df2.to_csv(csv_path, index=False)
 
     return df, csv_path
 
 '''if __name__ == "__main__":
-    benchmark_dpir_deblur_to_csv(
+    benchmark_deblur_to_csv(
         test_dir="./BSDS300/images/images_benchmark/benchmark_10_images",
         ckpt_path="./weights_ircnn_sigmap/ircnn_sigmap_final.pth",
         levin09_path="kernels/Levin09.npy",

@@ -14,10 +14,10 @@ def _rmse(a: torch.Tensor) -> float:
 
 @torch.no_grad()
 def hqs_deblur_with_trace(
-    y: torch.Tensor,                 # (B,3,H,W) in [0,1]
-    otf: torch.Tensor,               # (H,W) complex
-    denoiser: torch.nn.Module,       # IRCNNModelManager
-    sigma_img: float,                # pixel space
+    y: torch.Tensor,
+    otf: torch.Tensor,
+    denoiser: torch.nn.Module,
+    sigma_img: float,
     lam: float = 0.23,
     n_iter: int = 8,
     sigma_max: float = 49.0,
@@ -72,7 +72,7 @@ def hqs_deblur_with_trace(
         X = numer / denom
         x = torch.fft.ifft2(X, dim=(-2, -1)).real
 
-        # z-step (denoise)
+        # z-step
         expert = denoiser.get_expert(sigma_d)
         z = expert.denoise(x).clamp(0, 1)
 
@@ -168,7 +168,7 @@ def test_deblurring_with_levin09_convergence(
 
     y = (blurry + noise).clamp(0.0, 1.0)
 
-    # run  + trace
+    # hqs
     it_dir = os.path.join(out_dir, "iters") if save_iters else None
     x_hat, logs = hqs_deblur_with_trace(
         y=y, otf=otf, denoiser=model,
@@ -189,7 +189,6 @@ def test_deblurring_with_levin09_convergence(
     TF.to_pil_image(y.squeeze(0).cpu()).save(os.path.join(out_dir, f"blurry_k{kernel_index}_sigma{sigma_img:.2f}.png"))
     TF.to_pil_image(x_hat.squeeze(0).cpu()).save(os.path.join(out_dir, f"restored_k{kernel_index}_sigma{sigma_img:.2f}.png"))
 
-    # save kernel vis
     k_vis = (k / (k.max() + 1e-12)).detach().cpu().numpy()
     k_vis = (k_vis * 255.0).clip(0, 255).astype(np.uint8)
     Image.fromarray(k_vis).save(os.path.join(out_dir, f"kernel_k{kernel_index}.png"))
@@ -220,7 +219,7 @@ def plot_convergence_curves(logs, title="Convergence Deblur IRCNN", save_dir ="r
     ssim_z = np.array(logs["ssim_z"])
     ssim_x = np.array(logs["ssim_x"])
 
-    # 1) data fidelity + x-z consistency
+    # data fidelity + x-z consistency
     plt.figure()
     plt.plot(ks, data_rmse, label="RMSE(y - Hx_k)")
     plt.plot(ks, xz_rmse, label="RMSE(x_k - z_k)")
@@ -231,7 +230,7 @@ def plot_convergence_curves(logs, title="Convergence Deblur IRCNN", save_dir ="r
     plt.savefig(os.path.join(save_dir, f"rmse.png"), dpi=200)
     plt.grid(True)
 
-    # 2) relative changes
+    # relative changes
     plt.figure()
     plt.plot(ks, dx_rel, label="rel change x_k")
     plt.plot(ks, dz_rel, label="rel change z_k")
@@ -242,7 +241,7 @@ def plot_convergence_curves(logs, title="Convergence Deblur IRCNN", save_dir ="r
     plt.savefig(os.path.join(save_dir, f"relative_changes.png"), dpi=200)
     plt.grid(True)
 
-    # 3) PSNR
+    # PSNR
     plt.figure()
     plt.plot(ks, psnr_x, label="PSNR x_k")
     plt.plot(ks, psnr_z, label="PSNR z_k")
@@ -253,7 +252,7 @@ def plot_convergence_curves(logs, title="Convergence Deblur IRCNN", save_dir ="r
     plt.savefig(os.path.join(save_dir, f"psnr.png"), dpi=200)
     plt.grid(True)
     
-    # 3) SSIM
+    # SSIM
     plt.figure()
     plt.plot(ks, ssim_x, label="SSIM x_k")
     plt.plot(ks, ssim_z, label="SSIM z_k")
@@ -264,7 +263,7 @@ def plot_convergence_curves(logs, title="Convergence Deblur IRCNN", save_dir ="r
     plt.savefig(os.path.join(save_dir, f"ssim.png"), dpi=200)
     plt.grid(True)
 
-    # 4) sigma schedule
+    # sigma schedule
     plt.figure()
     plt.plot(ks, sigma_d)
     plt.xlabel("iteration k")
@@ -275,9 +274,9 @@ def plot_convergence_curves(logs, title="Convergence Deblur IRCNN", save_dir ="r
     plt.show()
 
 
-if __name__ == "__main__":
+'''if __name__ == "__main__":
     # Plane
-    '''logs = test_deblurring_with_levin09_convergence(
+    logs = test_deblurring_with_levin09_convergence(
         clean_path="./BSDS300/images/test/37073.jpg",
         ckpt_path="./weights_ircnn",
         levin09_path="kernels/Levin09.npy",
@@ -289,7 +288,7 @@ if __name__ == "__main__":
         seed=0,
         save_iters=True
     )
-    plot_convergence_curves(logs, save_dir = "results_IRCNN/deblur_courbes/plane")'''
+    plot_convergence_curves(logs, save_dir = "results_IRCNN/deblur_courbes/plane")
 
 
     # Castel
@@ -305,5 +304,5 @@ if __name__ == "__main__":
         seed=0,
         save_iters=True
     )
-    plot_convergence_curves(logs, save_dir = "results_IRCNN/deblur_courbes/castel")
+    plot_convergence_curves(logs, save_dir = "results_IRCNN/deblur_courbes/castel")'''
 

@@ -9,10 +9,10 @@ IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff")
 
 class FixedSigmaPatchDataset(Dataset):
     """
-    Échantillonne des patchs et ajoute un bruit Gaussien FIXE (spécifique à un modèle).
-    Retourne :
-      noisy (3,H,W) -> L'entrée du réseau (plus de canal sigma_map)
-      clean (3,H,W) -> La cible (image propre)
+    Sample patchs and add fixed gaussian noise specific to a model
+    Outputs :
+      noisy (3,H,W)
+      clean (3,H,W)
     """
     def __init__(self, clean_dir: str, patch: int = 35, sigma: float = 25.0):
         self.paths = [
@@ -22,14 +22,13 @@ class FixedSigmaPatchDataset(Dataset):
         if not self.paths:
             raise ValueError(f"No images found in {clean_dir}")
         self.patch = patch
-        self.sigma = sigma # Maintenant un paramètre fixe par instance
+        self.sigma = sigma
 
     def __len__(self):
-        return 1000000 # Toujours arbitraire car piloté par steps_per_epoch
+        return 1000000
 
     def _random_crop(self, img: Image.Image) -> Image.Image:
         w, h = img.size
-        # On s'assure que l'image est assez grande pour le patch (35x35)
         if w < self.patch or h < self.patch:
             img = img.resize((max(w, self.patch), max(h, self.patch)), Image.BICUBIC)
             w, h = img.size
@@ -38,7 +37,6 @@ class FixedSigmaPatchDataset(Dataset):
         return img.crop((x0, y0, x0 + self.patch, y0 + self.patch))
 
     def _augment(self, img: Image.Image) -> Image.Image:
-        # Data Augmentation recommandée par l'article
         if random.random() < 0.5:
             img = TF.hflip(img)
         if random.random() < 0.5:
@@ -54,13 +52,10 @@ class FixedSigmaPatchDataset(Dataset):
         img = self._random_crop(img)
         img = self._augment(img)
 
-        clean = TF.to_tensor(img)  # (3,H,W)
-        
-        # Ajout du bruit spécifique à cette session d'entraînement
+        clean = TF.to_tensor(img)
         noise = torch.randn_like(clean) * (self.sigma / 255.0)
         noisy = clean + noise
 
-        # On ne retourne que (noisy, clean) car le modèle est spécialisé
         return noisy, clean
     
     
@@ -72,7 +67,6 @@ class IRCNNFixed(nn.Module):
     """
     def __init__(self, in_channels=3, n_filters=64):
         super(IRCNNFixed, self).__init__()
-        # Séquence de dilatations de l'article
         dilations = [1, 2, 3, 4, 3, 2, 1]
         self.layers = nn.ModuleList()
 
@@ -82,7 +76,6 @@ class IRCNNFixed(nn.Module):
                 self.layers.append(nn.ReLU(inplace=True))
             elif i < 6:
                 self.layers.append(nn.Conv2d(n_filters, n_filters, 3, padding=d, dilation=d, bias=False))
-                # BatchNorm + ReLU pour les couches intermédiaires
                 self.layers.append(nn.BatchNorm2d(n_filters))
                 self.layers.append(nn.ReLU(inplace=True))
             else:
@@ -90,11 +83,9 @@ class IRCNNFixed(nn.Module):
 
 
     def forward(self, x):
-        # Le réseau interne prédit le BRUIT (le résidu)
         noise_pred = x
         for layer in self.layers:
             noise_pred = layer(noise_pred)
-        # On soustrait le bruit prédit à l'image d'entrée
         return noise_pred
 
     def denoise(self, x):
@@ -102,7 +93,7 @@ class IRCNNFixed(nn.Module):
 
 
 class IRCNNModelManager:
-    """ Gère le chargement dynamique des 25 experts. """
+    """ Manage dynamic loading of our 25 experts. """
     def __init__(self, model_dir, device="cpu"):
         self.model_dir = model_dir
         self.device = device
@@ -111,7 +102,6 @@ class IRCNNModelManager:
         self.current_sigma = None
 
     def get_expert(self, target_sigma):
-        # Trouver l'expert le plus proche (ex: target 12.5 -> expert 15)
         closest = min(self.available_sigmas, key=lambda x: abs(x - target_sigma))
         if closest != self.current_sigma:
             path = os.path.join(self.model_dir, f"ircnn_sigma_{closest}_final.pth")
