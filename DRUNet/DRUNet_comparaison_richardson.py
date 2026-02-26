@@ -36,7 +36,7 @@ def deblur_tikhonov_l2(y: torch.Tensor, otf: torch.Tensor, beta: float = 2e-3) -
     X = (Hc * Y) / (H2 + beta)
     x = torch.fft.ifft2(X, dim=(-2, -1)).real
     return x.clamp(0.0, 1.0)
-
+  
 @torch.no_grad()
 def richardson_lucy_circular(y: torch.Tensor, otf: torch.Tensor, iters: int = 30, eps: float = 1e-8) -> torch.Tensor:
     # init
