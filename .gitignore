@@ -9,9 +9,9 @@ __pycache__/
 .DS_Store
 
 # weights / checkpoints because too big to push them 
-#weights_*/
-#**/weights_*/
-#*.pth
-#*.pt
-#*.ckpt
+weights_*/
+**/weights_*/
+*.pth
+*.pt
+*.ckpt
 
